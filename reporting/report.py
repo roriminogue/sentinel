@@ -64,11 +64,19 @@ def _current_fingerprints() -> dict[str, str]:
 
 
 def _is_stale(result, fingerprints: dict[str, str]) -> bool:
-    """True when this row came from a prompt the corpus has since changed."""
+    """True when this row came from a prompt the corpus has since changed.
+
+    Rows written before hashing exist in quantity, and they are the ones most
+    likely to be stale, so fall back to hashing the prompt text they stored
+    rather than declining to judge them.
+    """
+    from attacks.corpus import fingerprint_text
+
     current = fingerprints.get(result.attack_id)
-    if current is None or result.prompt_hash is None:
-        return False  # unknown attack, or written before hashes existed
-    return result.prompt_hash != current
+    if current is None:
+        return False  # attack no longer in the corpus; nothing to compare to
+    stored = result.prompt_hash or fingerprint_text(result.prompt)
+    return stored != current
 
 
 def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
@@ -93,22 +101,14 @@ def summary(session) -> None:
 
     fingerprints = _current_fingerprints()
     stale = [r for r in results if _is_stale(r, fingerprints)]
-    unhashed = [r for r in results if r.prompt_hash is None]
-    if stale or unhashed:
+    if stale:
+        ids = sorted({r.attack_id for r in stale})
         print("  NOTE on corpus versions:")
-        if stale:
-            ids = sorted({r.attack_id for r in stale})
-            print(
-                f"    {len(stale)} result(s) came from older wording of: "
-                f"{', '.join(ids)}"
-            )
-            print("    Re-run those attacks; old and new are different tests.")
-        if unhashed:
-            print(
-                f"    {len(unhashed)} result(s) predate prompt hashing — "
-                "version unknown."
-            )
-        print()
+        print(
+            f"    {len(stale)} result(s) came from older wording of: "
+            f"{', '.join(ids)}"
+        )
+        print("    Old and new are different tests — exclude or re-run them.\n")
 
     # Order by id so later scores win: a database written before rescoring
     # replaced old rows can hold more than one score per (result, scorer).

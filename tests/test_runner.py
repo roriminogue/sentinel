@@ -79,6 +79,29 @@ def test_run_stores_prompt_hash(tmp_path):
             assert row.prompt_hash == corpus[row.attack_id]
 
 
+def test_stale_detection_works_on_rows_written_before_hashing():
+    """Pre-hash rows are the likeliest to be stale, so they must still be
+    classifiable from the prompt text they stored."""
+    from types import SimpleNamespace
+
+    from reporting.report import _current_fingerprints, _is_stale
+
+    fingerprints = _current_fingerprints()
+    attack = load_corpus()[0]
+
+    # A pre-hash row whose stored prompt matches the current corpus.
+    current = SimpleNamespace(
+        attack_id=attack.id, prompt=attack.rendered_prompt, prompt_hash=None
+    )
+    assert not _is_stale(current, fingerprints)
+
+    # A pre-hash row from wording the corpus has since changed.
+    outdated = SimpleNamespace(
+        attack_id=attack.id, prompt="some older wording entirely", prompt_hash=None
+    )
+    assert _is_stale(outdated, fingerprints)
+
+
 def test_corpus_ids_unique_and_wellformed():
     corpus = load_corpus()
     ids = [a.id for a in corpus]
