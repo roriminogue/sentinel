@@ -92,6 +92,7 @@ def run(
                     result_id=result.id,
                     scorer_name=scorer.name,
                     verdict=str(outcome.verdict),
+                    technique=str(outcome.technique) if outcome.technique else None,
                     confidence=outcome.confidence,
                     rationale=outcome.rationale,
                 )

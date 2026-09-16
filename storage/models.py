@@ -59,7 +59,11 @@ class Score(Base):
         ForeignKey("results.id"), index=True
     )
     scorer_name: Mapped[str] = mapped_column(String(64), index=True)
+    # Outcome axis: did disallowed content come out?
     verdict: Mapped[str] = mapped_column(String(32), index=True)
+    # Method axis: did the attack's manipulation work? Null when a scorer
+    # cannot assess it (the heuristic never can).
+    technique: Mapped[str | None] = mapped_column(String(32), nullable=True)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
