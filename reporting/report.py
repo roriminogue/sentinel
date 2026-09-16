@@ -38,6 +38,39 @@ def _wrap(text: str, indent: str = "    ", limit: int | None = None) -> str:
     return indent + body.replace("\n", "\n" + indent)
 
 
+def _latest_scores(session, result_id: int) -> list[Score]:
+    """One score per scorer — the most recent.
+
+    Databases written before rescoring replaced instead of appended can hold
+    several scores for the same (result, scorer); the newest is the live one.
+    """
+    rows = (
+        session.query(Score)
+        .filter(Score.result_id == result_id)
+        .order_by(Score.id)
+        .all()
+    )
+    newest: dict[str, Score] = {}
+    for row in rows:
+        newest[row.scorer_name] = row
+    return list(newest.values())
+
+
+def _current_fingerprints() -> dict[str, str]:
+    """attack_id -> fingerprint of the prompt currently in the corpus."""
+    from attacks import load_corpus
+
+    return {a.id: a.fingerprint for a in load_corpus()}
+
+
+def _is_stale(result, fingerprints: dict[str, str]) -> bool:
+    """True when this row came from a prompt the corpus has since changed."""
+    current = fingerprints.get(result.attack_id)
+    if current is None or result.prompt_hash is None:
+        return False  # unknown attack, or written before hashes existed
+    return result.prompt_hash != current
+
+
 def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
     """Most recent run per scenario, so repeated runs don't look like duplicates."""
     rows = session.query(AgentResult).order_by(AgentResult.id).all()
@@ -58,7 +91,28 @@ def summary(session) -> None:
     print(_RULE)
     print(f"{len(results)} scored-eligible results ({errored} errored, excluded)\n")
 
-    scores = session.query(Score).all()
+    fingerprints = _current_fingerprints()
+    stale = [r for r in results if _is_stale(r, fingerprints)]
+    unhashed = [r for r in results if r.prompt_hash is None]
+    if stale or unhashed:
+        print("  NOTE on corpus versions:")
+        if stale:
+            ids = sorted({r.attack_id for r in stale})
+            print(
+                f"    {len(stale)} result(s) came from older wording of: "
+                f"{', '.join(ids)}"
+            )
+            print("    Re-run those attacks; old and new are different tests.")
+        if unhashed:
+            print(
+                f"    {len(unhashed)} result(s) predate prompt hashing — "
+                "version unknown."
+            )
+        print()
+
+    # Order by id so later scores win: a database written before rescoring
+    # replaced old rows can hold more than one score per (result, scorer).
+    scores = session.query(Score).order_by(Score.id).all()
     by_result = defaultdict(dict)
     for s in scores:
         by_result[s.result_id][s.scorer_name] = s.verdict
@@ -104,18 +158,20 @@ def summary(session) -> None:
 
 def complied(session) -> None:
     """Attacks a judge scored as successful — the ones worth reading."""
-    rows = (
-        session.query(Result, Score)
-        .join(Score, Score.result_id == Result.id)
-        .filter(Score.verdict == "complied")
-        .all()
-    )
+    fingerprints = _current_fingerprints()
+    rows = []
+    for result in session.query(Result).order_by(Result.id).all():
+        for score in _latest_scores(session, result.id):
+            if score.verdict == "complied":
+                rows.append((result, score))
+
     if not rows:
         print("No results scored 'complied' by any scorer.")
         return
     for result, score in rows:
         print(_RULE)
-        print(f"{result.attack_id}  [{result.category}]  scorer={score.scorer_name}")
+        mark = "  [STALE: prompt has changed since]" if _is_stale(result, fingerprints) else ""
+        print(f"{result.attack_id}  [{result.category}]  scorer={score.scorer_name}{mark}")
         print(f"verdict: complied   technique: {score.technique or 'n/a'}")
         print(f"rationale: {score.rationale}")
         print("\nPROMPT:")
@@ -131,7 +187,7 @@ def disagreements(session) -> None:
     These are the most informative rows in the database: one of the scorers is
     wrong, and finding out which teaches you something about both.
     """
-    scores = session.query(Score).all()
+    scores = session.query(Score).order_by(Score.id).all()
     by_result = defaultdict(dict)
     for s in scores:
         by_result[s.result_id][s.scorer_name] = s.verdict
@@ -162,10 +218,12 @@ def attack_detail(session, needle: str) -> None:
     if not rows:
         print(f"No attack matching {needle!r}.")
         return
+    fingerprints = _current_fingerprints()
     for result in rows:
-        scores = session.query(Score).filter(Score.result_id == result.id).all()
+        scores = _latest_scores(session, result.id)
         print(_RULE)
-        print(f"{result.attack_id}  [{result.category}]  model={result.target_model}")
+        mark = "  [STALE: prompt has changed since]" if _is_stale(result, fingerprints) else ""
+        print(f"{result.attack_id}  [{result.category}]  model={result.target_model}{mark}")
         for s in scores:
             technique = f", technique={s.technique}" if s.technique else ""
             print(f"  {s.scorer_name}: verdict={s.verdict}{technique}")

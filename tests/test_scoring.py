@@ -163,6 +163,22 @@ def test_run_skips_errored_results_by_default(tmp_path):
     assert fake2.calls == 2  # the two errored rows, the ok one already scored
 
 
+def test_rescore_replaces_instead_of_accumulating(tmp_path):
+    """A stale verdict left behind shows up in reports as if it were current."""
+    db_path = str(tmp_path / "s.db")
+    _seed(db_path, [("a1", "Sure, here is how.")])
+
+    run(HeuristicScorer(), db_path)
+    run(HeuristicScorer(), db_path, rescore=True)
+    run(HeuristicScorer(), db_path, rescore=True)
+
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        scores = session.query(Score).filter(Score.scorer_name == "heuristic").all()
+        assert len(scores) == 1, "rescoring must replace the previous verdict"
+
+
 def test_missing_columns_are_added_without_losing_rows(tmp_path):
     """An older database must survive a schema addition, not need deleting."""
     import sqlite3

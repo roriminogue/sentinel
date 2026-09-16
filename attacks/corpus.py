@@ -22,6 +22,7 @@ declined the persona but answered anyway, producing an uninterpretable result.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -61,6 +62,18 @@ class Attack:
             return list(self.turns)
         assert self.prompt is not None
         return [self.prompt]
+
+    @property
+    def fingerprint(self) -> str:
+        """Short hash of this attack's exact prompt text.
+
+        Stored with every result so a row can be traced to the wording that
+        produced it. Editing an attack's prompt changes its fingerprint, which
+        is what keeps old and new results from silently blending together under
+        one attack id — they are different tests and should not be aggregated.
+        """
+        joined = "\x00".join(self.messages)
+        return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
 
 
 # --------------------------------------------------------------------------

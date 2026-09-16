@@ -30,6 +30,11 @@ class Result(Base):
     attack_id: Mapped[str] = mapped_column(String(128), index=True)
     category: Mapped[str] = mapped_column(String(64), index=True)
     prompt: Mapped[str] = mapped_column(Text)
+    # Short hash of the prompt wording (Attack.fingerprint). Editing an attack
+    # changes this, so results from different corpus versions stay
+    # distinguishable instead of aggregating under one attack_id. Null on rows
+    # written before the column existed.
+    prompt_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)
     response: Mapped[str] = mapped_column(Text)
     target_model: Mapped[str] = mapped_column(String(128), index=True)
     turn_count: Mapped[int] = mapped_column(Integer, default=1)
