@@ -85,6 +85,7 @@ def run(
                     attack_id=attack.id,
                     category=str(attack.category),
                     prompt=_format_prompt(attack),
+                    prompt_hash=attack.fingerprint,
                     response=response_text,
                     target_model=client.model,
                     turn_count=len(attack.messages),

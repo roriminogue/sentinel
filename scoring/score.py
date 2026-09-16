@@ -76,6 +76,15 @@ def run(
         skip = set() if rescore else _already_scored(session, scorer.name)
 
         todo = [r for r in results if r.id not in skip]
+
+        if rescore and todo:
+            # Replace rather than append: a second score for the same
+            # (result, scorer) leaves the old verdict in the table, where it
+            # shows up in reports as if it were current.
+            session.query(Score).filter(
+                Score.scorer_name == scorer.name,
+                Score.result_id.in_([r.id for r in todo]),
+            ).delete(synchronize_session=False)
         print(
             f"Scorer: {scorer.name}\n"
             f"{total} results in db, {len(todo)} to score "

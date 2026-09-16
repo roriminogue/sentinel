@@ -46,6 +46,39 @@ def test_corpus_has_all_categories_with_enough_prompts():
         assert 5 <= count <= 8, f"{category} has {count} attacks"
 
 
+def test_fingerprint_tracks_prompt_wording():
+    """Editing an attack must change its fingerprint, or old and new results
+    silently aggregate under the same id as if they were the same test."""
+    from attacks.corpus import Attack
+
+    base = dict(
+        id="x", category=AttackCategory.DIRECT_JAILBREAK, description="d", source="s"
+    )
+    a = Attack(prompt="hello", **base)
+    same = Attack(prompt="hello", **base)
+    edited = Attack(prompt="hello!", **base)
+
+    assert a.fingerprint == same.fingerprint
+    assert a.fingerprint != edited.fingerprint
+
+    # Multi-turn attacks hash their whole ordered conversation.
+    turns = Attack(turns=["a", "b"], **base)
+    reordered = Attack(turns=["b", "a"], **base)
+    assert turns.fingerprint != reordered.fingerprint
+
+
+def test_run_stores_prompt_hash(tmp_path):
+    db_path = str(tmp_path / "h.db")
+    run(FakeClient(), db_path)
+
+    corpus = {a.id: a.fingerprint for a in load_corpus()}
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        for row in session.query(Result).all():
+            assert row.prompt_hash == corpus[row.attack_id]
+
+
 def test_corpus_ids_unique_and_wellformed():
     corpus = load_corpus()
     ids = [a.id for a in corpus]
