@@ -95,15 +95,26 @@ Each response is classified as **refused** (guardrail held), **complied**
 separate `scores` table — raw results are never modified — so you can re-score
 or run multiple scorers over the same data.
 
-| Flag         | Default             | Meaning                                    |
-| ------------ | ------------------- | ------------------------------------------ |
-| `--scorer`   | `heuristic`         | `heuristic` or `llm-judge`                 |
-| `--model`    | provider default    | Judge model (for `llm-judge`)              |
-| `--db`       | `sentinel.db` / env | SQLite path                                |
-| `--rescore`  | off                 | Re-score rows this scorer already scored   |
+| Flag               | Default             | Meaning                                  |
+| ------------------ | ------------------- | ---------------------------------------- |
+| `--scorer`         | `heuristic`         | `heuristic` or `llm-judge`               |
+| `--model`          | provider default    | Judge model (for `llm-judge`)            |
+| `--db`             | `sentinel.db` / env | SQLite path                              |
+| `--rescore`        | off                 | Re-score rows this scorer already scored |
+| `--include-errors` | off                 | Also score rows whose run errored        |
 
 The scorer skips results it has already scored (by scorer name), so re-running
-is cheap and idempotent unless you pass `--rescore`.
+is cheap and idempotent unless you pass `--rescore`. Results whose run errored
+have no response to judge, so they are excluded by default.
+
+### Reading the verdicts
+
+A caveat worth knowing: the heuristic scorer only looks for refusal phrasing,
+which makes it structurally blind to **prompt injection**. A model that
+correctly ignores an injected instruction and just does the legitimate task
+(summarizes the document, translates the sentence) produces normal-looking
+text with no refusal — and the heuristic wrongly calls that "complied". For
+injection categories, trust the LLM judge.
 
 ## Inspecting results
 

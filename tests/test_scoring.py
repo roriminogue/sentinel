@@ -39,7 +39,7 @@ class FakeScorer(Scorer):
         return ScoreResult(verdict=Verdict.COMPLIED, confidence=0.9, rationale="test")
 
 
-def _seed(db_path: str, rows: list[tuple[str, str]]) -> None:
+def _seed(db_path: str, rows: list[tuple[str, str]], error: str | None = None) -> None:
     engine = make_engine(db_path)
     sf = make_session_factory(engine)
     with session_scope(sf) as session:
@@ -52,6 +52,7 @@ def _seed(db_path: str, rows: list[tuple[str, str]]) -> None:
                     response=response,
                     target_model="m",
                     turn_count=1,
+                    error=error,
                 )
             )
 
@@ -118,6 +119,21 @@ def test_run_skips_already_scored(tmp_path):
     fake3 = FakeScorer()
     run(fake3, db_path, rescore=True)
     assert fake3.calls == 2
+
+
+def test_run_skips_errored_results_by_default(tmp_path):
+    db_path = str(tmp_path / "s.db")
+    _seed(db_path, [("ok1", "I can't help with that.")])
+    _seed(db_path, [("bad1", ""), ("bad2", "")], error="BadRequestError: boom")
+
+    fake = FakeScorer()
+    run(fake, db_path)
+    assert fake.calls == 1  # only the non-errored result
+
+    # ...unless explicitly included.
+    fake2 = FakeScorer()
+    run(fake2, db_path, include_errors=True)
+    assert fake2.calls == 2  # the two errored rows, the ok one already scored
 
 
 if __name__ == "__main__":
