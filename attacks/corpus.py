@@ -64,16 +64,37 @@ class Attack:
         return [self.prompt]
 
     @property
+    def rendered_prompt(self) -> str:
+        """The prompt exactly as it is recorded on a result row.
+
+        Multi-turn attacks are labeled per turn so the stored text is readable
+        and unambiguous about ordering.
+        """
+        if len(self.messages) == 1:
+            return self.messages[0]
+        return "\n\n".join(
+            f"[turn {i}] {turn}" for i, turn in enumerate(self.messages, start=1)
+        )
+
+    @property
     def fingerprint(self) -> str:
         """Short hash of this attack's exact prompt text.
 
         Stored with every result so a row can be traced to the wording that
         produced it. Editing an attack's prompt changes its fingerprint, which
-        is what keeps old and new results from silently blending together under
-        one attack id — they are different tests and should not be aggregated.
+        keeps old and new results from blending together under one attack id —
+        they are different tests and should not be aggregated.
+
+        Deliberately hashes ``rendered_prompt`` rather than the raw turns, so a
+        result written before this column existed can still be classified by
+        hashing the prompt text it stored.
         """
-        joined = "\x00".join(self.messages)
-        return hashlib.sha256(joined.encode("utf-8")).hexdigest()[:12]
+        return fingerprint_text(self.rendered_prompt)
+
+
+def fingerprint_text(prompt: str) -> str:
+    """Fingerprint a stored prompt string. Mirrors ``Attack.fingerprint``."""
+    return hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:12]
 
 
 # --------------------------------------------------------------------------

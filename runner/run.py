@@ -32,13 +32,6 @@ def build_client(target: str, model: str | None, max_tokens: int) -> TargetClien
     raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic")
 
 
-def _format_prompt(attack: Attack) -> str:
-    """Human-readable record of what was sent (labels turns for multi-turn)."""
-    if attack.is_multi_turn:
-        return "\n\n".join(
-            f"[turn {i}] {t}" for i, t in enumerate(attack.messages, start=1)
-        )
-    return attack.messages[0]
 
 
 def run(
@@ -84,7 +77,7 @@ def run(
                 Result(
                     attack_id=attack.id,
                     category=str(attack.category),
-                    prompt=_format_prompt(attack),
+                    prompt=attack.rendered_prompt,
                     prompt_hash=attack.fingerprint,
                     response=response_text,
                     target_model=client.model,
