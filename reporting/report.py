@@ -38,6 +38,17 @@ def _wrap(text: str, indent: str = "    ", limit: int | None = None) -> str:
     return indent + body.replace("\n", "\n" + indent)
 
 
+def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
+    """Most recent run per scenario, so repeated runs don't look like duplicates."""
+    rows = session.query(AgentResult).order_by(AgentResult.id).all()
+    if all_runs:
+        return rows
+    newest: dict[str, AgentResult] = {}
+    for row in rows:
+        newest[row.scenario_id] = row  # later rows overwrite earlier ones
+    return sorted(newest.values(), key=lambda r: r.scenario_id)
+
+
 def summary(session) -> None:
     results = session.query(Result).filter(Result.error.is_(None)).all()
     errored = session.query(Result).filter(Result.error.isnot(None)).count()
@@ -70,7 +81,7 @@ def summary(session) -> None:
             print(f"    {category:24s} {'  '.join(parts)}")
         print()
 
-    agent_rows = session.query(AgentResult).all()
+    agent_rows = _latest_agent_runs(session)
     if agent_rows:
         print(_RULE)
         print("AGENT SCENARIOS (phase 3)")
@@ -80,8 +91,8 @@ def summary(session) -> None:
         errors = sum(1 for r in agent_rows if r.error)
         defended = len(agent_rows) - compromised - inconclusive - errors
         print(
-            f"  {len(agent_rows)} runs: {defended} defended, {compromised} compromised, "
-            f"{inconclusive} inconclusive, {errors} errors\n"
+            f"  {len(agent_rows)} scenarios (latest run each): {defended} defended, "
+            f"{compromised} compromised, {inconclusive} inconclusive, {errors} errors\n"
         )
         for r in agent_rows:
             if r.compromised:
@@ -105,6 +116,7 @@ def complied(session) -> None:
     for result, score in rows:
         print(_RULE)
         print(f"{result.attack_id}  [{result.category}]  scorer={score.scorer_name}")
+        print(f"verdict: complied   technique: {score.technique or 'n/a'}")
         print(f"rationale: {score.rationale}")
         print("\nPROMPT:")
         print(_wrap(result.prompt, limit=600))
@@ -155,7 +167,9 @@ def attack_detail(session, needle: str) -> None:
         print(_RULE)
         print(f"{result.attack_id}  [{result.category}]  model={result.target_model}")
         for s in scores:
-            print(f"  {s.scorer_name}: {s.verdict} ({s.rationale})")
+            technique = f", technique={s.technique}" if s.technique else ""
+            print(f"  {s.scorer_name}: verdict={s.verdict}{technique}")
+            print(f"      {s.rationale}")
         print("\nPROMPT:")
         print(_wrap(result.prompt))
         print("\nRESPONSE:")
@@ -165,11 +179,13 @@ def attack_detail(session, needle: str) -> None:
         print()
 
 
-def agent_detail(session) -> None:
-    rows = session.query(AgentResult).all()
+def agent_detail(session, all_runs: bool = False) -> None:
+    rows = _latest_agent_runs(session, all_runs=all_runs)
     if not rows:
         print("No agent runs yet — run: python agent/run_agent.py")
         return
+    if not all_runs:
+        print("(latest run per scenario; use --all for full history)\n")
     for r in rows:
         if r.compromised:
             state = "COMPROMISED"
@@ -180,7 +196,8 @@ def agent_detail(session) -> None:
         else:
             state = "defended"
         print(_RULE)
-        print(f"{r.scenario_id}  [{r.category}]  {state}")
+        stamp = r.timestamp.strftime("%Y-%m-%d %H:%M") if r.timestamp else "?"
+        print(f"{r.scenario_id}  [{r.category}]  {state}   ({stamp})")
         if r.violated_rule:
             print(f"  violation: {r.violated_rule}")
         calls = (
@@ -207,6 +224,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--attack", help="Show full detail for attacks matching this id.")
     parser.add_argument("--agent", action="store_true", help="Show agent run detail.")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="With --agent, show every historical run instead of the latest each.",
+    )
     args = parser.parse_args(argv)
 
     engine = make_engine(args.db)
@@ -219,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.attack:
             attack_detail(session, args.attack)
         elif args.agent:
-            agent_detail(session)
+            agent_detail(session, all_runs=args.all)
         else:
             summary(session)
     return 0

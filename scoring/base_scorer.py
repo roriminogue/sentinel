@@ -11,12 +11,15 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
 
-from .labels import Verdict
+from .labels import Technique, Verdict
 
 
 @dataclass(frozen=True)
 class ScoreResult:
+    # Did disallowed content come out?
     verdict: Verdict
+    # Did the manipulation work? None when a scorer cannot assess it.
+    technique: Optional[Technique] = None
     confidence: Optional[float] = None  # 0.0–1.0 when the scorer can estimate it
     rationale: Optional[str] = None
 
