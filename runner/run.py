@@ -44,9 +44,18 @@ def _format_prompt(attack: Attack) -> str:
 def run(
     client: TargetClient,
     db_path: str,
+    only: str | None = None,
+    category: str | None = None,
+    verbose: bool = False,
 ) -> tuple[int, int]:
-    """Run the full corpus. Returns (attacks_run, errors)."""
+    """Run the corpus. Returns (attacks_run, errors)."""
     corpus = load_corpus()
+    if only:
+        corpus = [a for a in corpus if only in a.id]
+    if category:
+        corpus = [a for a in corpus if str(a.category) == category]
+    if not corpus:
+        raise ValueError("No attacks matched the given filters.")
     engine = make_engine(db_path)
     session_factory = make_session_factory(engine)
 
@@ -61,6 +70,14 @@ def run(
             error_text = f"{type(exc).__name__}: {exc}"
             errors += 1
             print(f"    ERROR: {error_text}", flush=True)
+
+        if verbose:
+            print("    " + "-" * 66)
+            for turn_number, turn in enumerate(attack.messages, start=1):
+                print(f"    [turn {turn_number}] PROMPT: {turn}")
+            shown = response_text if len(response_text) <= 800 else response_text[:800] + " ..."
+            print(f"    RESPONSE: {shown.replace(chr(10), chr(10) + '              ')}")
+            print("    " + "-" * 66)
 
         with session_scope(session_factory) as session:
             session.add(
@@ -102,6 +119,20 @@ def main(argv: list[str] | None = None) -> int:
         default=int(os.getenv("SENTINEL_MAX_TOKENS", "1024")),
         help="Max tokens per model response (default: 1024).",
     )
+    parser.add_argument(
+        "--attack",
+        help="Run only attacks whose id contains this string (e.g. eo-001).",
+    )
+    parser.add_argument(
+        "--category",
+        help="Run only one category (e.g. prompt_injection).",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print each prompt and the model's response.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -113,7 +144,17 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Target: {args.target} / model: {client.model}")
     print(f"Database: {args.db}\n")
 
-    total, errors = run(client, args.db)
+    try:
+        total, errors = run(
+            client,
+            args.db,
+            only=args.attack,
+            category=args.category,
+            verbose=args.verbose,
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
     print(
         f"\nDone. {total} attacks run, {errors} errors. "

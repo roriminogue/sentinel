@@ -44,9 +44,38 @@ def build_client(target: str, model: str | None, max_tokens: int) -> AgentClient
     raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic")
 
 
-def run(client: AgentClient, db_path: str) -> tuple[int, int, int, int]:
-    """Run all scenarios. Returns (total, compromised, inconclusive, errors)."""
+def _print_transcript(scenario, outcome) -> None:
+    """Show the whole attack step by step: task, tool calls, what came back."""
+    print("    " + "-" * 66)
+    print(f"    SYSTEM: {scenario.system}")
+    print(f"    TASK:   {scenario.task}")
+    print(f"    PAYLOAD DELIVERED BY: {', '.join(scenario.payload_tools)}")
+    for index, call in enumerate(outcome.trace.tool_calls):
+        flag = "  <-- VIOLATION" if index in outcome.violating_calls else ""
+        print(f"\n    [step {call.step}] CALL {call.name}({json.dumps(call.arguments)}){flag}")
+        if call.result:
+            body = call.result if len(call.result) <= 500 else call.result[:500] + " ..."
+            indented = body.replace("\n", "\n             ")
+            print(f"             RETURNED: {indented}")
+    if outcome.trace.final_text:
+        final = outcome.trace.final_text
+        final = final if len(final) <= 500 else final[:500] + " ..."
+        print(f"\n    FINAL ANSWER: {final.replace(chr(10), chr(10) + '                  ')}")
+    print("    " + "-" * 66)
+
+
+def run(
+    client: AgentClient,
+    db_path: str,
+    only: str | None = None,
+    verbose: bool = False,
+) -> tuple[int, int, int, int]:
+    """Run scenarios. Returns (total, compromised, inconclusive, errors)."""
     scenarios = load_scenarios()
+    if only:
+        scenarios = [s for s in scenarios if only in s.id]
+        if not scenarios:
+            raise ValueError(f"No scenario matching {only!r}")
     engine = make_engine(db_path)
     session_factory = make_session_factory(engine)
 
@@ -73,8 +102,12 @@ def run(client: AgentClient, db_path: str) -> tuple[int, int, int, int]:
             )
         else:
             print(
-                f"    safe ({len(outcome.trace.tool_calls)} tool call(s))", flush=True
+                f"    defended ({len(outcome.trace.tool_calls)} tool call(s))",
+                flush=True,
             )
+
+        if verbose:
+            _print_transcript(scenario, outcome)
 
         with session_scope(session_factory) as session:
             row = AgentResult(
@@ -130,6 +163,16 @@ def main(argv: list[str] | None = None) -> int:
         default=int(os.getenv("SENTINEL_MAX_TOKENS", "1024")),
         help="Max tokens per model response (default: 1024).",
     )
+    parser.add_argument(
+        "--scenario",
+        help="Run only scenarios whose id contains this string (e.g. ag-003).",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print the full transcript: every tool call and what it returned.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -142,7 +185,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Database: {args.db}")
     print("All tool calls are simulated — no real actions are performed.\n")
 
-    total, compromised, inconclusive, errors = run(client, args.db)
+    try:
+        total, compromised, inconclusive, errors = run(
+            client, args.db, only=args.scenario, verbose=args.verbose
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
     defended = total - compromised - inconclusive - errors
 
     print(

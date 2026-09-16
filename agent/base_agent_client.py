@@ -24,6 +24,9 @@ class RecordedToolCall:
     step: int
     name: str
     arguments: Dict[str, Any]
+    # What the simulated tool returned — for a payload-carrying tool this is the
+    # injected text the agent then had to decide about. Kept for transcripts.
+    result: str = ""
 
 
 @dataclass

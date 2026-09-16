@@ -73,14 +73,20 @@ class AnthropicAgentClient(AgentClient):
             results = []
             for block in tool_uses:
                 arguments = dict(block.input or {})
+                tool_result = tool_handler(block.name, arguments)
                 trace.tool_calls.append(
-                    RecordedToolCall(step=step, name=block.name, arguments=arguments)
+                    RecordedToolCall(
+                        step=step,
+                        name=block.name,
+                        arguments=arguments,
+                        result=tool_result,
+                    )
                 )
                 results.append(
                     {
                         "type": "tool_result",
                         "tool_use_id": block.id,
-                        "content": tool_handler(block.name, arguments),
+                        "content": tool_result,
                     }
                 )
             messages.append({"role": "user", "content": results})
