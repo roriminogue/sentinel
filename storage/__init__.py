@@ -1,9 +1,10 @@
 from .db import make_engine, make_session_factory, session_scope
-from .models import Base, Result
+from .models import Base, Result, Score
 
 __all__ = [
     "Base",
     "Result",
+    "Score",
     "make_engine",
     "make_session_factory",
     "session_scope",

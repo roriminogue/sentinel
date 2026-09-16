@@ -1,0 +1,124 @@
+"""Tests for the Phase 2 scoring layer.
+
+These use the heuristic scorer and a fake scorer, so they need no API key.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scoring import HeuristicScorer, ScoreResult, Scorer, Verdict  # noqa: E402
+from scoring.llm_judge import _parse_verdict  # noqa: E402
+from scoring.score import run  # noqa: E402
+from storage import (  # noqa: E402
+    Result,
+    Score,
+    make_engine,
+    make_session_factory,
+    session_scope,
+)
+
+
+class FakeScorer(Scorer):
+    """Always returns COMPLIED; records how many times it was called."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    @property
+    def name(self) -> str:
+        return "fake"
+
+    def score(self, prompt: str, response: str) -> ScoreResult:
+        self.calls += 1
+        return ScoreResult(verdict=Verdict.COMPLIED, confidence=0.9, rationale="test")
+
+
+def _seed(db_path: str, rows: list[tuple[str, str]]) -> None:
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        for attack_id, response in rows:
+            session.add(
+                Result(
+                    attack_id=attack_id,
+                    category="direct_jailbreak",
+                    prompt="p",
+                    response=response,
+                    target_model="m",
+                    turn_count=1,
+                )
+            )
+
+
+def test_heuristic_detects_refusal():
+    s = HeuristicScorer()
+    assert s.score("p", "I can't help with that request.").verdict == Verdict.REFUSED
+    assert s.score("p", "I'm sorry, but I cannot assist.").verdict == Verdict.REFUSED
+    assert s.score("p", "That is against my guidelines.").verdict == Verdict.REFUSED
+
+
+def test_heuristic_detects_compliance_and_empty():
+    s = HeuristicScorer()
+    assert s.score("p", "Sure! Here are the steps: first, ...").verdict == Verdict.COMPLIED
+    assert s.score("p", "").verdict == Verdict.UNCLEAR
+    assert s.score("p", "   ").verdict == Verdict.UNCLEAR
+
+
+def test_llm_judge_parser_handles_valid_and_garbage():
+    good = _parse_verdict('{"verdict": "refused", "confidence": 0.8, "rationale": "declined"}')
+    assert good.verdict == Verdict.REFUSED
+    assert good.confidence == 0.8
+
+    wrapped = _parse_verdict('Here you go: {"verdict":"complied","confidence":1}')
+    assert wrapped.verdict == Verdict.COMPLIED
+
+    garbage = _parse_verdict("no json here")
+    assert garbage.verdict == Verdict.UNCLEAR
+
+    bad_label = _parse_verdict('{"verdict": "banana"}')
+    assert bad_label.verdict == Verdict.UNCLEAR
+
+
+def test_run_scores_all_and_writes_table(tmp_path):
+    db_path = str(tmp_path / "s.db")
+    _seed(db_path, [("a1", "I can't help with that."), ("a2", "Sure, here is how.")])
+
+    tally = run(HeuristicScorer(), db_path)
+    assert tally[str(Verdict.REFUSED)] == 1
+    assert tally[str(Verdict.COMPLIED)] == 1
+
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        scores = session.query(Score).all()
+        assert len(scores) == 2
+        assert all(s.scorer_name == "heuristic" for s in scores)
+
+
+def test_run_skips_already_scored(tmp_path):
+    db_path = str(tmp_path / "s.db")
+    _seed(db_path, [("a1", "Sure, here is how."), ("a2", "Sure, here is how.")])
+
+    fake = FakeScorer()
+    run(fake, db_path)
+    assert fake.calls == 2
+
+    # Second run with the same scorer should skip everything.
+    fake2 = FakeScorer()
+    run(fake2, db_path)
+    assert fake2.calls == 0
+
+    # ...unless rescore is requested.
+    fake3 = FakeScorer()
+    run(fake3, db_path, rescore=True)
+    assert fake3.calls == 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main([__file__, "-v"]))
