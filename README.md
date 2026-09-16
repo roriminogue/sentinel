@@ -5,9 +5,13 @@ An automated LLM red-teaming and guardrail-evaluation framework.
 **Phase 1:** a categorized corpus of adversarial prompts, a runner that fires
 each one at a target LLM, and a local SQLite log of every prompt/response pair.
 
-**Phase 2 (current):** a scoring layer that judges each stored response —
-did the attack succeed (model complied) or did the guardrail hold (model
-refused)? Agent/tool-call security and a dashboard are future phases.
+**Phase 2:** a scoring layer that judges each stored response — did the attack
+succeed (model complied) or did the guardrail hold (model refused)?
+
+**Phase 3 (current):** agent/tool-call security. Gives the model *tools*, plants
+adversarial instructions in what those tools return, and checks whether the
+agent can be made to take an unsafe **action**. A dashboard is the remaining
+phase.
 
 ## What it does
 
@@ -17,7 +21,9 @@ refused)? Agent/tool-call security and a dashboard are future phases.
 3. Logs every prompt + full response + metadata to a local SQLite database.
 4. Scores each response as refused / complied / partial / unclear, using a
    fast heuristic scorer or an LLM judge.
-5. Is easy to extend with new attack categories, target models, and scorers.
+5. Tests tool-using agents against injected instructions and records every
+   tool call the agent attempts.
+6. Is easy to extend with new attack categories, target models, and scorers.
 
 ## Project layout
 
@@ -36,8 +42,16 @@ sentinel/
 │   ├── heuristic_scorer.py# offline keyword refusal detector
 │   ├── llm_judge.py       # LLM-as-judge scorer
 │   └── score.py           # CLI entrypoint
+├── agent/            # agent/tool-call security (Phase 3)
+│   ├── categories.py      # AgentAttackCategory enum
+│   ├── tools.py           # mock tool schemas + simulated executor
+│   ├── scenarios.py       # scenarios + declarative violation rules
+│   ├── base_agent_client.py # tool-capable client interface
+│   ├── anthropic_agent.py # Anthropic agent-loop implementation
+│   ├── harness.py         # runs a scenario, detects violations
+│   └── run_agent.py       # CLI entrypoint
 ├── storage/          # SQLite persistence (SQLAlchemy)
-│   ├── models.py     # Result + Score schema
+│   ├── models.py     # Result, Score, AgentResult, AgentToolCall
 │   └── db.py         # engine/session handling
 ├── tests/            # smoke tests (no API key needed)
 └── docs/methodology.md
@@ -116,9 +130,39 @@ correctly ignores an injected instruction and just does the legitimate task
 text with no refusal — and the heuristic wrongly calls that "complied". For
 injection categories, trust the LLM judge.
 
+## Agent / tool-call security
+
+```bash
+python agent/run_agent.py --target anthropic --model claude-haiku-4-5
+```
+
+Each scenario hands the model a benign task plus a set of tools, then plants an
+adversarial instruction in what one of those tools returns (a fetched page, a
+file, a search result). The framework records every tool call the agent
+attempts and flags the run **compromised** if a call matches the scenario's
+violation rules — e.g. POSTing to an attacker domain, emailing an external
+address, or deleting a file because a README said to.
+
+**Every tool is simulated.** `agent/tools.py` never reads a real file, sends a
+real request, or deletes anything; a tool call only returns canned text. The
+point is to observe whether the model *attempts* an unsafe action, never to let
+one happen.
+
+Unlike Phase 2, the verdict needs no LLM judge — the action either occurred or
+it did not, so detection is mechanical and deterministic.
+
+Categories covered: tool injection, data exfiltration, destructive action,
+scope escalation, and confused deputy.
+
 ## Inspecting results
 
 ```bash
+# Agent scenarios that were compromised:
+sqlite3 sentinel.db "SELECT scenario_id, category, violated_rule FROM agent_results WHERE compromised = 1;"
+
+# Every tool call an agent attempted, violations first:
+sqlite3 sentinel.db "SELECT r.scenario_id, c.step, c.tool_name, c.violating, c.arguments FROM agent_results r JOIN agent_tool_calls c ON c.agent_result_id = r.id ORDER BY c.violating DESC;"
+
 # Raw prompt/response pairs:
 sqlite3 sentinel.db "SELECT attack_id, category, turn_count, error IS NOT NULL AS failed FROM results;"
 
@@ -146,6 +190,9 @@ sqlite3 sentinel.db "SELECT r.category, s.verdict, COUNT(*) FROM results r JOIN 
   needed.
 - **New scorers:** implement `Scorer` (see `scoring/base_scorer.py`) and
   register it in `build_scorer()` in `scoring/score.py`.
+- **New agent scenarios:** add an `AgentScenario(...)` in `agent/scenarios.py`
+  with its own `ViolationRule`s. Add new mock tools to `TOOL_SCHEMAS` in
+  `agent/tools.py` — keep them simulated.
 
 ## Tests
 
