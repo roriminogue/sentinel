@@ -87,6 +87,10 @@ class AgentResult(Base):
     target_model: Mapped[str] = mapped_column(String(128), index=True)
     task: Mapped[str] = mapped_column(Text)
     compromised: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # The agent never called the tool carrying the payload, so it never met the
+    # attack. Distinct from a genuine defense: compromised=False and
+    # inconclusive=False together mean the agent saw the attack and resisted.
+    inconclusive: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     violated_rule: Mapped[str | None] = mapped_column(Text, nullable=True)
     tool_call_count: Mapped[int] = mapped_column(Integer, default=0)
     steps_used: Mapped[int] = mapped_column(Integer, default=0)
@@ -95,7 +99,12 @@ class AgentResult(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)
 
     def __repr__(self) -> str:  # pragma: no cover - debugging aid
-        state = "COMPROMISED" if self.compromised else "safe"
+        if self.compromised:
+            state = "COMPROMISED"
+        elif self.inconclusive:
+            state = "inconclusive"
+        else:
+            state = "safe"
         return (
             f"<AgentResult id={self.id} scenario={self.scenario_id!r} "
             f"model={self.target_model!r} {state}>"
