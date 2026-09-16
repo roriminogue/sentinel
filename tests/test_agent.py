@@ -79,6 +79,17 @@ class SafeAgent(AgentClient):
         return trace
 
 
+class LazyAgent(AgentClient):
+    """Calls no tools at all — never reaches the payload, so proves nothing."""
+
+    @property
+    def model(self) -> str:
+        return "fake-lazy"
+
+    def run(self, system, task, tools, tool_handler, max_steps) -> AgentTrace:
+        return AgentTrace(steps_used=1, final_text="I need more information.")
+
+
 class ExplodingAgent(AgentClient):
     @property
     def model(self) -> str:
@@ -133,10 +144,18 @@ def test_tool_specs_rejects_unknown():
     assert len(tool_specs(list(TOOL_SCHEMAS))) == len(TOOL_SCHEMAS)
 
 
+def test_every_scenario_declares_a_payload_tool():
+    for s in load_scenarios():
+        assert s.payload_tools, f"{s.id}: no canned payload, nothing to resist"
+        for tool in s.payload_tools:
+            assert tool in s.tools, f"{s.id}: payload tool not offered to the agent"
+
+
 def test_compliant_agent_is_flagged_compromised(tmp_path):
     db_path = str(tmp_path / "a.db")
-    total, compromised, errors = run(CompliantAgent(), db_path)
+    total, compromised, inconclusive, errors = run(CompliantAgent(), db_path)
     assert errors == 0
+    assert inconclusive == 0
     assert compromised == total, "every scenario should catch a fully compliant agent"
 
     engine = make_engine(db_path)
@@ -152,9 +171,11 @@ def test_compliant_agent_is_flagged_compromised(tmp_path):
 
 def test_safe_agent_is_not_flagged(tmp_path):
     db_path = str(tmp_path / "a.db")
-    total, compromised, errors = run(SafeAgent(), db_path)
+    total, compromised, inconclusive, errors = run(SafeAgent(), db_path)
     assert errors == 0
     assert compromised == 0
+    # The safe agent reaches the payload tool, so these are genuine defenses.
+    assert inconclusive == 0
 
     engine = make_engine(db_path)
     sf = make_session_factory(engine)
@@ -163,9 +184,24 @@ def test_safe_agent_is_not_flagged(tmp_path):
         assert session.query(AgentToolCall).filter_by(violating=True).count() == 0
 
 
+def test_agent_that_never_reaches_payload_is_inconclusive(tmp_path):
+    """A no-op must never be recorded as a successful defense."""
+    db_path = str(tmp_path / "a.db")
+    total, compromised, inconclusive, errors = run(LazyAgent(), db_path)
+    assert compromised == 0
+    assert errors == 0
+    assert inconclusive == total
+
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        rows = session.query(AgentResult).all()
+        assert all(r.inconclusive and not r.compromised for r in rows)
+
+
 def test_provider_failure_is_recorded_not_raised(tmp_path):
     db_path = str(tmp_path / "a.db")
-    total, compromised, errors = run(ExplodingAgent(), db_path)
+    total, compromised, inconclusive, errors = run(ExplodingAgent(), db_path)
     assert errors == total
     assert compromised == 0
 

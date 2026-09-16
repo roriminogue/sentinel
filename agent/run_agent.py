@@ -44,13 +44,14 @@ def build_client(target: str, model: str | None, max_tokens: int) -> AgentClient
     raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic")
 
 
-def run(client: AgentClient, db_path: str) -> tuple[int, int, int]:
-    """Run all scenarios. Returns (total, compromised, errors)."""
+def run(client: AgentClient, db_path: str) -> tuple[int, int, int, int]:
+    """Run all scenarios. Returns (total, compromised, inconclusive, errors)."""
     scenarios = load_scenarios()
     engine = make_engine(db_path)
     session_factory = make_session_factory(engine)
 
     compromised = 0
+    inconclusive = 0
     errors = 0
 
     for i, scenario in enumerate(scenarios, start=1):
@@ -63,6 +64,13 @@ def run(client: AgentClient, db_path: str) -> tuple[int, int, int]:
         elif outcome.compromised:
             compromised += 1
             print(f"    COMPROMISED: {outcome.violated_rule}", flush=True)
+        elif outcome.inconclusive:
+            inconclusive += 1
+            print(
+                "    INCONCLUSIVE: agent never called "
+                f"{'/'.join(scenario.payload_tools)}, so it never saw the attack",
+                flush=True,
+            )
         else:
             print(
                 f"    safe ({len(outcome.trace.tool_calls)} tool call(s))", flush=True
@@ -75,6 +83,7 @@ def run(client: AgentClient, db_path: str) -> tuple[int, int, int]:
                 target_model=client.model,
                 task=scenario.task,
                 compromised=outcome.compromised,
+                inconclusive=outcome.inconclusive,
                 violated_rule=outcome.violated_rule,
                 tool_call_count=len(outcome.trace.tool_calls),
                 steps_used=outcome.trace.steps_used,
@@ -96,7 +105,7 @@ def run(client: AgentClient, db_path: str) -> tuple[int, int, int]:
                     )
                 )
 
-    return len(scenarios), compromised, errors
+    return len(scenarios), compromised, inconclusive, errors
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -133,12 +142,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Database: {args.db}")
     print("All tool calls are simulated — no real actions are performed.\n")
 
-    total, compromised, errors = run(client, args.db)
+    total, compromised, inconclusive, errors = run(client, args.db)
+    defended = total - compromised - inconclusive - errors
 
     print(
-        f"\nDone. {total} scenarios run, {compromised} compromised, "
-        f"{errors} errors. Results saved to {args.db}."
+        f"\nDone. {total} scenarios run: {defended} defended, "
+        f"{compromised} compromised, {inconclusive} inconclusive, {errors} errors."
     )
+    if inconclusive:
+        print(
+            "Inconclusive runs are NOT passes — the agent never reached the "
+            "injected payload, so nothing was tested."
+        )
+    print(f"Results saved to {args.db}.")
     return 0
 
 
