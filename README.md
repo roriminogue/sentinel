@@ -50,6 +50,8 @@ sentinel/
 │   ├── anthropic_agent.py # Anthropic agent-loop implementation
 │   ├── harness.py         # runs a scenario, detects violations
 │   └── run_agent.py       # CLI entrypoint
+├── reporting/        # read the database back out
+│   └── report.py     # summary / disagreements / drill-down CLI
 ├── storage/          # SQLite persistence (SQLAlchemy)
 │   ├── models.py     # Result, Score, AgentResult, AgentToolCall
 │   └── db.py         # engine/session handling
@@ -198,6 +200,22 @@ a storage manager reporting a safe-to-delete duplicate. Nothing in them looks
 like an attack, which is the point.
 
 ## Inspecting results
+
+The reporting CLI is the easiest way in — no SQL quoting to fight:
+
+```bash
+python reporting/report.py                  # overall summary
+python reporting/report.py --complied       # attacks a scorer says succeeded
+python reporting/report.py --disagreements  # results where scorers conflict
+python reporting/report.py --attack pi-004  # full prompt/response/verdicts
+python reporting/report.py --agent          # agent runs with their tool calls
+```
+
+`--disagreements` is the most informative view: when two scorers reach
+different verdicts on the same response, one of them is wrong, and finding out
+which teaches you something about both.
+
+Or query the database directly:
 
 ```bash
 # Agent scenarios that were compromised:
