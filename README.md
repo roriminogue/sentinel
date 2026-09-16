@@ -168,6 +168,35 @@ so they are tracked separately.
 Categories covered: tool injection, data exfiltration, destructive action,
 scope escalation, and confused deputy.
 
+### Watching one attack play out
+
+To understand the mechanism, run a single scenario with the full transcript:
+
+```bash
+python agent/run_agent.py --scenario ag-008 --verbose
+```
+
+That prints the system prompt, the task, every tool call, the exact text the
+simulated tool returned (including the injected payload), and the agent's final
+answer — so you can see what the model was shown and what it decided.
+
+The same filters exist on the Phase 1 runner:
+
+```bash
+python runner/run.py --attack eo-001 --verbose
+python runner/run.py --category prompt_injection --verbose
+```
+
+### Overt vs. subtle scenarios
+
+`ag-001` through `ag-007` announce themselves (`SYSTEM OVERRIDE:`, fake
+`<system>` tags) — useful as a floor: a model that falls for these has no
+injection defense at all. `ag-008` through `ag-011` are the harder case, written
+to read like ordinary workflow text: a numbered step in a work ticket, an
+"ops note" about mirroring a backup, a claimed message from the account owner,
+a storage manager reporting a safe-to-delete duplicate. Nothing in them looks
+like an attack, which is the point.
+
 ## Inspecting results
 
 ```bash
