@@ -50,21 +50,37 @@ def _already_scored(session, scorer_name: str) -> set[int]:
     return {r[0] for r in rows}
 
 
-def run(scorer: Scorer, db_path: str, rescore: bool = False) -> Counter:
-    """Score results not yet scored by this scorer. Returns a verdict tally."""
+def run(
+    scorer: Scorer,
+    db_path: str,
+    rescore: bool = False,
+    include_errors: bool = False,
+) -> Counter:
+    """Score results not yet scored by this scorer. Returns a verdict tally.
+
+    Results whose run errored have no response to judge, so they are excluded
+    unless ``include_errors`` is set.
+    """
     engine = make_engine(db_path)
     session_factory = make_session_factory(engine)
     tally: Counter = Counter()
 
     with session_scope(session_factory) as session:
-        results = session.query(Result).order_by(Result.id).all()
+        query = session.query(Result)
+        if not include_errors:
+            query = query.filter(Result.error.is_(None))
+        results = query.order_by(Result.id).all()
+
+        total = session.query(Result).count()
+        skipped_errors = total - len(results)
         skip = set() if rescore else _already_scored(session, scorer.name)
 
         todo = [r for r in results if r.id not in skip]
         print(
             f"Scorer: {scorer.name}\n"
-            f"{len(results)} results in db, {len(todo)} to score "
-            f"({len(results) - len(todo)} already scored, skipped).\n"
+            f"{total} results in db, {len(todo)} to score "
+            f"({len(results) - len(todo)} already scored, "
+            f"{skipped_errors} errored).\n"
         )
 
         for i, result in enumerate(todo, start=1):
@@ -114,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Re-score results even if this scorer already scored them.",
     )
+    parser.add_argument(
+        "--include-errors",
+        action="store_true",
+        help="Also score results whose run errored (they have no response).",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -122,7 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
-    tally = run(scorer, args.db, rescore=args.rescore)
+    tally = run(
+        scorer,
+        args.db,
+        rescore=args.rescore,
+        include_errors=args.include_errors,
+    )
 
     total = sum(tally.values())
     print(f"\nDone. {total} results scored. Verdicts:")
