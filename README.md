@@ -8,10 +8,11 @@ each one at a target LLM, and a local SQLite log of every prompt/response pair.
 **Phase 2:** a scoring layer that judges each stored response — did the attack
 succeed (model complied) or did the guardrail hold (model refused)?
 
-**Phase 3 (current):** agent/tool-call security. Gives the model *tools*, plants
-adversarial instructions in what those tools return, and checks whether the
-agent can be made to take an unsafe **action**. A dashboard is the remaining
-phase.
+**Phase 3:** agent/tool-call security. Gives the model *tools*, plants adversarial
+instructions in what those tools return, and checks whether the agent can be made
+to take an unsafe **action**.
+
+**Phase 4 (current):** a self-contained HTML report over everything above.
 
 ## What it does
 
@@ -51,7 +52,8 @@ sentinel/
 │   ├── harness.py         # runs a scenario, detects violations
 │   └── run_agent.py       # CLI entrypoint
 ├── reporting/        # read the database back out
-│   └── report.py     # summary / disagreements / drill-down CLI
+│   ├── report.py     # summary / disagreements / drill-down CLI
+│   └── dashboard.py  # self-contained HTML report
 ├── storage/          # SQLite persistence (SQLAlchemy)
 │   ├── models.py     # Result, Score, AgentResult, AgentToolCall
 │   └── db.py         # engine/session handling
@@ -210,6 +212,30 @@ to read like ordinary workflow text: a numbered step in a work ticket, an
 "ops note" about mirroring a backup, a claimed message from the account owner,
 a storage manager reporting a safe-to-delete duplicate. Nothing in them looks
 like an attack, which is the point.
+
+## The HTML report
+
+```bash
+python reporting/dashboard.py
+```
+
+Writes `sentinel-report.html` — one file, no server, no external assets. Open it
+in a browser. It shows headline tiles, verdicts by category per scorer, the
+scorer disagreements, every agent scenario with its tool calls, and a table view
+of everything.
+
+Design constraints worth knowing, since they shape what you see:
+
+- **Bar length is the result count**, segments are the verdict split. Normalising
+  every bar to full width would make 6 and 7 look identical.
+- **Status colors never carry meaning alone.** Status red and green measure a
+  deutan colour difference of about 4 — near-identical for red-green colorblind
+  readers — so every state also carries a glyph and a word, and every chart has
+  a table twin.
+- **Stale results are excluded** by default (`--include-stale` to keep them).
+- **Model output is escaped.** Responses in this database are adversarial by
+  construction; an unescaped report would be a delivery vehicle for whatever the
+  target model was induced to emit.
 
 ## Inspecting results
 
