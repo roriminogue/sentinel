@@ -36,6 +36,10 @@ class Result(Base):
     # written before the column existed.
     prompt_hash: Mapped[str | None] = mapped_column(String(16), nullable=True)
     response: Mapped[str] = mapped_column(Text)
+    # Why the provider stopped generating ("end_turn", "refusal", ...). A
+    # "refusal" with empty text means the provider blocked the request itself;
+    # scoring must count that as refused, not as an unreadable empty response.
+    stop_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     target_model: Mapped[str] = mapped_column(String(128), index=True)
     turn_count: Mapped[int] = mapped_column(Integer, default=1)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)

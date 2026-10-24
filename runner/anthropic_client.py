@@ -7,7 +7,7 @@ from typing import List, Optional
 
 import anthropic
 
-from .base_client import TargetClient
+from .base_client import PROVIDER_REFUSAL, TargetClient, TargetReply
 
 DEFAULT_MODEL = "claude-haiku-4-5"
 DEFAULT_MAX_TOKENS = 1024
@@ -43,15 +43,22 @@ class AnthropicClient(TargetClient):
     def model(self) -> str:
         return self._model
 
-    def send(self, turns: List[str]) -> str:
+    def send(self, turns: List[str]) -> TargetReply:
         messages = []
-        final_text = ""
+        reply = TargetReply(text="")
         for turn in turns:
             messages.append({"role": "user", "content": turn})
-            reply = self._create_with_retry(messages)
-            final_text = _extract_text(reply)
-            messages.append({"role": "assistant", "content": final_text})
-        return final_text
+            message = self._create_with_retry(messages)
+            reply = TargetReply(
+                text=_extract_text(message),
+                stop_reason=getattr(message, "stop_reason", None),
+            )
+            if reply.stop_reason == PROVIDER_REFUSAL:
+                # The API declined the turn and returned no reply, so there is
+                # nothing to thread into the next turn; the attack ends here.
+                return reply
+            messages.append({"role": "assistant", "content": reply.text})
+        return reply
 
     def _create_with_retry(self, messages: list) -> "anthropic.types.Message":
         attempt = 0

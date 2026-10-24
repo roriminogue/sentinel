@@ -79,6 +79,28 @@ def _is_stale(result, fingerprints: dict[str, str]) -> bool:
     return stored != current
 
 
+def _latest_results(session, all_runs: bool = False) -> list[Result]:
+    """Most recent successful result per attack.
+
+    Re-running the corpus appends a fresh row for every attack, so counting all
+    rows reports run count, not attack count: three runs of 27 attacks read as
+    81 results. Errored rows are skipped so a failed re-run doesn't hide the
+    last real response.
+    """
+    rows = (
+        session.query(Result)
+        .filter(Result.error.is_(None))
+        .order_by(Result.id)
+        .all()
+    )
+    if all_runs:
+        return rows
+    newest: dict[str, Result] = {}
+    for row in rows:
+        newest[row.attack_id] = row  # later rows overwrite earlier ones
+    return sorted(newest.values(), key=lambda r: r.attack_id)
+
+
 def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
     """Most recent run per scenario, so repeated runs don't look like duplicates."""
     rows = session.query(AgentResult).order_by(AgentResult.id).all()
@@ -90,14 +112,15 @@ def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
     return sorted(newest.values(), key=lambda r: r.scenario_id)
 
 
-def summary(session) -> None:
-    results = session.query(Result).filter(Result.error.is_(None)).all()
+def summary(session, all_runs: bool = False) -> None:
+    results = _latest_results(session, all_runs=all_runs)
     errored = session.query(Result).filter(Result.error.isnot(None)).count()
 
     print(_RULE)
     print("PROMPT ATTACKS (phases 1-2)")
     print(_RULE)
-    print(f"{len(results)} scored-eligible results ({errored} errored, excluded)\n")
+    scope = "every run" if all_runs else "latest run of each attack; --all for every run"
+    print(f"{len(results)} results ({scope}). {errored} errored run(s) excluded.\n")
 
     fingerprints = _current_fingerprints()
     stale = [r for r in results if _is_stale(r, fingerprints)]
@@ -156,11 +179,11 @@ def summary(session) -> None:
         print()
 
 
-def complied(session) -> None:
+def complied(session, all_runs: bool = False) -> None:
     """Attacks a judge scored as successful — the ones worth reading."""
     fingerprints = _current_fingerprints()
     rows = []
-    for result in session.query(Result).order_by(Result.id).all():
+    for result in _latest_results(session, all_runs=all_runs):
         for score in _latest_scores(session, result.id):
             if score.verdict == "complied":
                 rows.append((result, score))
@@ -181,16 +204,18 @@ def complied(session) -> None:
         print()
 
 
-def disagreements(session) -> None:
+def disagreements(session, all_runs: bool = False) -> None:
     """Results where two scorers reached different verdicts.
 
     These are the most informative rows in the database: one of the scorers is
     wrong, and finding out which teaches you something about both.
     """
+    in_scope = {r.id for r in _latest_results(session, all_runs=all_runs)}
     scores = session.query(Score).order_by(Score.id).all()
     by_result = defaultdict(dict)
     for s in scores:
-        by_result[s.result_id][s.scorer_name] = s.verdict
+        if s.result_id in in_scope:
+            by_result[s.result_id][s.scorer_name] = s.verdict
 
     conflicts = {
         rid: verdicts
@@ -232,6 +257,7 @@ def attack_detail(session, needle: str) -> None:
         print(_wrap(result.prompt))
         print("\nRESPONSE:")
         print(_wrap(result.response or "(none)"))
+        print(f"\nSTOP REASON: {result.stop_reason or 'not recorded'}")
         if result.error:
             print(f"\nERROR: {result.error}")
         print()
@@ -285,7 +311,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--all",
         action="store_true",
-        help="With --agent, show every historical run instead of the latest each.",
+        help="Include every historical run, not just the latest per attack/scenario.",
     )
     args = parser.parse_args(argv)
 
@@ -293,15 +319,15 @@ def main(argv: list[str] | None = None) -> int:
     session_factory = make_session_factory(engine)
     with session_scope(session_factory) as session:
         if args.complied:
-            complied(session)
+            complied(session, all_runs=args.all)
         elif args.disagreements:
-            disagreements(session)
+            disagreements(session, all_runs=args.all)
         elif args.attack:
             attack_detail(session, args.attack)
         elif args.agent:
             agent_detail(session, all_runs=args.all)
         else:
-            summary(session)
+            summary(session, all_runs=args.all)
     return 0
 
 

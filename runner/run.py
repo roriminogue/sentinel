@@ -56,9 +56,11 @@ def run(
     for i, attack in enumerate(corpus, start=1):
         print(f"[{i}/{len(corpus)}] {attack.id} ({attack.category})", flush=True)
         response_text = ""
+        stop_reason: str | None = None
         error_text: str | None = None
         try:
-            response_text = client.send(attack.messages)
+            reply = client.send(attack.messages)
+            response_text, stop_reason = reply.text, reply.stop_reason
         except Exception as exc:  # noqa: BLE001 - one failure must not kill the run
             error_text = f"{type(exc).__name__}: {exc}"
             errors += 1
@@ -70,6 +72,7 @@ def run(
                 print(f"    [turn {turn_number}] PROMPT: {turn}")
             shown = response_text if len(response_text) <= 800 else response_text[:800] + " ..."
             print(f"    RESPONSE: {shown.replace(chr(10), chr(10) + '              ')}")
+            print(f"    STOP REASON: {stop_reason}")
             print("    " + "-" * 66)
 
         with session_scope(session_factory) as session:
@@ -80,6 +83,7 @@ def run(
                     prompt=attack.rendered_prompt,
                     prompt_hash=attack.fingerprint,
                     response=response_text,
+                    stop_reason=stop_reason,
                     target_model=client.model,
                     turn_count=len(attack.messages),
                     error=error_text,

@@ -30,12 +30,12 @@ from reporting.report import (  # noqa: E402
     _current_fingerprints,
     _is_stale,
     _latest_agent_runs,
+    _latest_results,
     _latest_scores,
 )
 from storage import (  # noqa: E402
     AgentResult,
     AgentToolCall,
-    Result,
     make_engine,
     make_session_factory,
     session_scope,
@@ -77,10 +77,10 @@ def _agent_state(row: AgentResult) -> str:
     return "defended"
 
 
-def gather(session, include_stale: bool) -> dict:
+def gather(session, include_stale: bool, all_runs: bool = False) -> dict:
     fingerprints = _current_fingerprints()
 
-    results = session.query(Result).filter(Result.error.is_(None)).all()
+    results = _latest_results(session, all_runs=all_runs)
     stale = [r for r in results if _is_stale(r, fingerprints)]
     if not include_stale:
         results = [r for r in results if not _is_stale(r, fingerprints)]
@@ -513,12 +513,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Include results from older wording of an attack.",
     )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Count every historical run instead of the latest per attack.",
+    )
     args = parser.parse_args(argv)
 
     engine = make_engine(args.db)
     session_factory = make_session_factory(engine)
     with session_scope(session_factory) as session:
-        data = gather(session, args.include_stale)
+        data = gather(session, args.include_stale, all_runs=args.all)
         page = render(data)
 
     with open(args.out, "w", encoding="utf-8") as handle:

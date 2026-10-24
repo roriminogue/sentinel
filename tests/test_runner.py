@@ -14,7 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from attacks import AttackCategory, load_corpus  # noqa: E402
-from runner.base_client import TargetClient  # noqa: E402
+from runner.base_client import PROVIDER_REFUSAL, TargetClient, TargetReply  # noqa: E402
 from runner.run import run  # noqa: E402
 from storage import Result, make_engine, make_session_factory, session_scope  # noqa: E402
 
@@ -22,21 +22,32 @@ from storage import Result, make_engine, make_session_factory, session_scope  # 
 class FakeClient(TargetClient):
     """Echoes a canned reply and records how many turns it saw per attack."""
 
-    def __init__(self, model: str = "fake-model", fail_on: set[str] | None = None):
+    def __init__(
+        self,
+        model: str = "fake-model",
+        fail_on: set[str] | None = None,
+        provider_refuses: bool = False,
+    ):
         self._model = model
         self._fail_on = fail_on or set()
+        self._provider_refuses = provider_refuses
         self.calls: list[List[str]] = []
 
     @property
     def model(self) -> str:
         return self._model
 
-    def send(self, turns: List[str]) -> str:
+    def send(self, turns: List[str]) -> TargetReply:
         self.calls.append(list(turns))
         first = turns[0]
         if first in self._fail_on:
             raise RuntimeError("simulated provider failure")
-        return f"REFUSAL: I can't help with that. (saw {len(turns)} turn(s))"
+        if self._provider_refuses:
+            return TargetReply(text="", stop_reason=PROVIDER_REFUSAL)
+        return TargetReply(
+            text=f"REFUSAL: I can't help with that. (saw {len(turns)} turn(s))",
+            stop_reason="end_turn",
+        )
 
 
 def test_corpus_has_all_categories_with_enough_prompts():
@@ -169,3 +180,49 @@ def test_multi_turn_sends_all_turns(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_reports_count_attacks_not_runs(tmp_path):
+    """Re-running the corpus must not inflate the attack count."""
+    from reporting.report import _latest_results
+
+    db_path = str(tmp_path / "runs.db")
+    client = FakeClient()
+    run(client, db_path)
+    run(client, db_path)
+    run(client, db_path)
+
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        latest = _latest_results(session)
+        assert len(latest) == len(load_corpus())
+        assert len({r.attack_id for r in latest}) == len(latest)
+        # The kept row is the newest run of each attack.
+        newest_ids = {
+            attack_id: max(r.id for r in session.query(Result).filter_by(attack_id=attack_id))
+            for attack_id in {r.attack_id for r in latest}
+        }
+        assert all(r.id == newest_ids[r.attack_id] for r in latest)
+        assert len(_latest_results(session, all_runs=True)) == 3 * len(load_corpus())
+
+
+def test_provider_refusal_stops_multi_turn_conversation():
+    """If the API refuses a turn there is no reply to continue from."""
+    from unittest.mock import MagicMock
+
+    from runner.anthropic_client import AnthropicClient
+
+    def message(text, stop_reason):
+        block = MagicMock(type="text", text=text)
+        return MagicMock(content=[block] if text else [], stop_reason=stop_reason)
+
+    client = AnthropicClient(api_key="test-key")
+    client._create_with_retry = MagicMock(
+        side_effect=[message("Sure, here's some background.", "end_turn"), message("", "refusal")]
+    )
+    reply = client.send(["turn 1", "turn 2", "turn 3"])
+
+    assert reply.stop_reason == "refusal"
+    assert reply.text == ""
+    assert client._create_with_retry.call_count == 2, "turn 3 must never be sent"

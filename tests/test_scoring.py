@@ -205,3 +205,30 @@ def test_missing_columns_are_added_without_losing_rows(tmp_path):
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
+
+
+def test_provider_refusal_scores_as_refused_without_calling_scorer(tmp_path):
+    """An empty response the provider blocked is a refusal, not 'unclear'.
+
+    Without this, the strongest kind of refusal - the request never reaching a
+    reply at all - would be filed as an unreadable empty response.
+    """
+    from runner.run import run as run_attacks
+    from tests.test_runner import FakeClient
+
+    db_path = str(tmp_path / "r.db")
+    run_attacks(FakeClient(provider_refuses=True), db_path, only="dj-001")
+
+    fake = FakeScorer()
+    tally = run(fake, db_path)
+    assert fake.calls == 0, "nothing to judge, so the scorer must not be asked"
+    assert tally[str(Verdict.REFUSED)] == 1
+
+    engine = make_engine(db_path)
+    sf = make_session_factory(engine)
+    with session_scope(sf) as session:
+        result = session.query(Result).one()
+        assert result.stop_reason == "refusal"
+        score = session.query(Score).one()
+        assert score.verdict == "refused"
+        assert "stop_reason=refusal" in score.rationale
