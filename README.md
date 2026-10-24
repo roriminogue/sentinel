@@ -1,30 +1,71 @@
 # Sentinel
 
-An automated LLM red-teaming and guardrail-evaluation framework.
+An automated red-teaming framework for testing whether a large language model's
+safety guardrails hold under adversarial attack — both what the model *says*
+and, when it is given tools, what it *does*.
 
-**Phase 1:** a categorized corpus of adversarial prompts, a runner that fires
-each one at a target LLM, and a local SQLite log of every prompt/response pair.
-
-**Phase 2:** a scoring layer that judges each stored response — did the attack
-succeed (model complied) or did the guardrail hold (model refused)?
-
-**Phase 3:** agent/tool-call security. Gives the model *tools*, plants adversarial
-instructions in what those tools return, and checks whether the agent can be made
-to take an unsafe **action**.
-
-**Phase 4 (current):** a self-contained HTML report over everything above.
+Sentinel fires a categorized corpus of attacks at a target model, scores every
+response, tests tool-using agents against hidden instructions in the data they
+read, and produces a self-contained HTML report.
 
 ## What it does
 
-1. Stores a categorized library of adversarial prompts (jailbreaks, prompt
-   injection, encoding/obfuscation tricks, multi-turn manipulation).
-2. Fires each prompt at a target LLM via its API.
-3. Logs every prompt + full response + metadata to a local SQLite database.
-4. Scores each response as refused / complied / partial / unclear, using a
-   fast heuristic scorer or an LLM judge.
-5. Tests tool-using agents against injected instructions and records every
-   tool call the agent attempts.
-6. Is easy to extend with new attack categories, target models, and scorers.
+1. **Attacks** — 27 adversarial prompts across four classes: direct jailbreaks,
+   prompt injection, encoding/obfuscation, and multi-turn manipulation.
+2. **Scores** — each response is judged on two independent axes (did disallowed
+   content come out; did the manipulation work), by a fast offline heuristic and
+   an LLM judge, so the two can be compared.
+3. **Tests agents** — 11 scenarios give the model simulated tools (files, email,
+   HTTP) and plant an adversarial instruction in a tool result, then check
+   whether the agent attempts the attacker's action. Nothing is ever executed.
+4. **Reports** — a terminal CLI for drill-down, and a single-file HTML report.
+
+The target-model client, the scorers, and the agent client each sit behind an
+abstract interface, so adding a provider or a scoring strategy means writing
+one class.
+
+## Quick start
+
+```bash
+git clone https://github.com/roriminogue/sentinel.git
+cd sentinel
+python -m venv .venv
+source .venv/bin/activate        # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+cp .env.example .env             # then set ANTHROPIC_API_KEY in .env
+
+python runner/run.py                                  # 1. attack
+python agent/run_agent.py                             # 2. agent scenarios
+python scoring/score.py --scorer heuristic            # 3. score (free)
+python scoring/score.py --scorer llm-judge            #    score (LLM judge)
+python reporting/dashboard.py                         # 4. writes sentinel-report.html
+```
+
+A full run against Claude Haiku 4.5 costs a few cents. The test suite needs no
+API key: `python -m pytest tests/`.
+
+## What building it taught me
+
+The most useful results were the times the framework's own measurements turned
+out to be wrong. Each is now guarded by a test.
+
+- **The heuristic scorer is structurally blind to prompt injection.** A model
+  that correctly ignores an injected instruction and just does the real task
+  produces ordinary text with no refusal phrase, so a refusal-matcher calls it
+  a failure. On Claude Haiku 4.5 it mislabeled every injection defense.
+- **"Didn't comply" is not "defended."** Agent runs where the model never called
+  the tool carrying the payload were being counted as passes. They now count as
+  *inconclusive*; otherwise a model too confused to use its tools scores perfectly.
+- **A jailbreak test needs a payload the model would refuse anyway.** An early
+  test asked for something borderline-legitimate; the model rejected the
+  jailbreak but answered the question, and the result was uninterpretable.
+- **Measurement bookkeeping matters.** Editing an attack silently mixed old and
+  new results; re-running inflated counts; provider-level refusals were stored
+  as empty responses and scored "unclear." Comparing a second model is what
+  exposed the last two.
+
+See [docs/methodology.md](docs/methodology.md) for the full methodology and its
+limitations.
 
 ## Project layout
 
@@ -43,7 +84,7 @@ sentinel/
 │   ├── heuristic_scorer.py# offline keyword refusal detector
 │   ├── llm_judge.py       # LLM-as-judge scorer
 │   └── score.py           # CLI entrypoint
-├── agent/            # agent/tool-call security (Phase 3)
+├── agent/            # agent/tool-call security
 │   ├── categories.py      # AgentAttackCategory enum
 │   ├── tools.py           # mock tool schemas + simulated executor
 │   ├── scenarios.py       # scenarios + declarative violation rules
@@ -56,24 +97,15 @@ sentinel/
 │   └── dashboard.py  # self-contained HTML report
 ├── storage/          # SQLite persistence (SQLAlchemy)
 │   ├── models.py     # Result, Score, AgentResult, AgentToolCall
-│   └── db.py         # engine/session handling
-├── tests/            # smoke tests (no API key needed)
-└── docs/methodology.md
+│   └── db.py         # engine/session handling, additive schema migration
+├── tests/            # 35 tests, no API key needed
+├── docs/methodology.md
+└── LICENSE           # MIT
 ```
 
-## Setup
+## Running attacks
 
 Requires Python 3.11+.
-
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-
-cp .env.example .env
-# edit .env and set ANTHROPIC_API_KEY
-```
-
-## Running
 
 ```bash
 python runner/run.py --target anthropic --model claude-haiku-4-5
@@ -134,8 +166,11 @@ modified — so you can re-score or run multiple scorers over the same data.
 | `--include-errors` | off                 | Also score rows whose run errored        |
 
 The scorer skips results it has already scored (by scorer name), so re-running
-is cheap and idempotent unless you pass `--rescore`. Results whose run errored
-have no response to judge, so they are excluded by default.
+is cheap and idempotent unless you pass `--rescore`, which replaces earlier
+verdicts rather than adding to them. Results whose run errored have no response
+to judge, so they are excluded by default. When the provider declined a request
+outright (`stop_reason=refusal`, no text), the result is recorded as refused
+directly — there is nothing for a scorer to read.
 
 ### Reading the verdicts
 
@@ -164,7 +199,7 @@ real request, or deletes anything; a tool call only returns canned text. The
 point is to observe whether the model *attempts* an unsafe action, never to let
 one happen.
 
-Unlike Phase 2, the verdict needs no LLM judge — the action either occurred or
+Unlike prompt scoring, this verdict needs no LLM judge — the action either occurred or
 it did not, so detection is mechanical and deterministic.
 
 Each run lands in one of four states:
@@ -196,7 +231,7 @@ That prints the system prompt, the task, every tool call, the exact text the
 simulated tool returned (including the injected payload), and the agent's final
 answer — so you can see what the model was shown and what it decided.
 
-The same filters exist on the Phase 1 runner:
+The same filters exist on the prompt-attack runner:
 
 ```bash
 python runner/run.py --attack eo-001 --verbose
@@ -232,6 +267,8 @@ Design constraints worth knowing, since they shape what you see:
   deutan colour difference of about 4 — near-identical for red-green colorblind
   readers — so every state also carries a glyph and a word, and every chart has
   a table twin.
+- **One result per attack.** Re-running the corpus doesn't inflate the counts;
+  the latest successful run of each attack is shown (`--all` for every run).
 - **Stale results are excluded** by default (`--include-stale` to keep them).
 - **Model output is escaped.** Responses in this database are adversarial by
   construction; an unescaped report would be a delivery vehicle for whatever the
@@ -251,31 +288,37 @@ python reporting/report.py --agent          # agent runs with their tool calls
 
 `--disagreements` is the most informative view: when two scorers reach
 different verdicts on the same response, one of them is wrong, and finding out
-which teaches you something about both.
+which teaches you something about both. Every view shows the latest run of each
+attack; add `--all` to include earlier runs.
 
-Or query the database directly:
+To compare models, give each its own database and keep the judge fixed so the
+model under test is the only variable:
 
 ```bash
-# Agent scenarios that were compromised:
-sqlite3 sentinel.db "SELECT scenario_id, category, violated_rule FROM agent_results WHERE compromised = 1;"
-
-# Every tool call an agent attempted, violations first:
-sqlite3 sentinel.db "SELECT r.scenario_id, c.step, c.tool_name, c.violating, c.arguments FROM agent_results r JOIN agent_tool_calls c ON c.agent_result_id = r.id ORDER BY c.violating DESC;"
-
-# Raw prompt/response pairs:
-sqlite3 sentinel.db "SELECT attack_id, category, turn_count, error IS NOT NULL AS failed FROM results;"
-
-# Results joined with their verdicts:
-sqlite3 sentinel.db "SELECT r.attack_id, r.category, s.scorer_name, s.verdict FROM results r JOIN scores s ON s.result_id = r.id;"
-
-# Attack success rate by category (lower 'complied' = stronger guardrails):
-sqlite3 sentinel.db "SELECT r.category, s.verdict, COUNT(*) FROM results r JOIN scores s ON s.result_id = r.id GROUP BY r.category, s.verdict;"
+python runner/run.py --model claude-sonnet-5 --db sonnet.db
+python agent/run_agent.py --model claude-sonnet-5 --db sonnet.db
+python scoring/score.py --scorer llm-judge --model claude-haiku-4-5 --db sonnet.db
+python reporting/dashboard.py --db sonnet.db --out sonnet-report.html
 ```
 
-`results` rows hold `attack_id`, `category`, `prompt`, full `response`,
-`target_model`, `turn_count`, `error` (null on success), and `timestamp`.
-`scores` rows hold `result_id`, `scorer_name`, `verdict`, `confidence`,
-`rationale`, and `timestamp`.
+### Database schema
+
+If you query `sentinel.db` directly, note that it keeps every run and every
+scorer's verdict, so a naive `GROUP BY` over `results JOIN scores` counts each
+attack once per run per scorer. The reporting tools above already handle this.
+
+- `results` — `attack_id`, `category`, `prompt`, `prompt_hash` (fingerprint of
+  the attack's wording), `response`, `stop_reason`, `target_model`,
+  `turn_count`, `error`, `timestamp`
+- `scores` — `result_id`, `scorer_name`, `verdict`, `technique`, `confidence`,
+  `rationale`, `timestamp`
+- `agent_results` — `scenario_id`, `category`, `compromised`, `inconclusive`,
+  `violated_rule`, `tool_call_count`, `final_text`, `error`, `timestamp`
+- `agent_tool_calls` — `agent_result_id`, `step`, `tool_name`, `arguments`,
+  `violating`
+
+Opening an older database adds any missing columns automatically, so results
+are never lost to a schema change.
 
 ## Extending
 
@@ -301,11 +344,23 @@ sqlite3 sentinel.db "SELECT r.category, s.verdict, COUNT(*) FROM results r JOIN 
 python -m pytest tests/ -v
 ```
 
-Tests use a fake in-memory client, so they run without an API key or network.
+Tests use fake in-memory clients, so they run without an API key or network.
+Several exist specifically to stop a measurement bug from returning — for
+example, that an agent which never reaches the payload is never recorded as a
+defense, and that the HTML report escapes model output.
 
-## Note on the corpus
+## Responsible use
 
-The prompts in `attacks/corpus.py` are adversarial by design — they reference
+The prompts in `attacks/corpus.py` are adversarial by design: they adapt
 publicly documented jailbreak and injection techniques so a defender can
-measure whether their model refuses appropriately. This is a defensive
-guardrail-evaluation tool.
+measure whether a model refuses appropriately. Each attack's payload is a
+*request* the model should decline; the repository contains no harmful content
+and no model responses (run databases and reports are git-ignored).
+
+Run Sentinel only against models and systems you are authorized to test — your
+own deployments, or provider APIs within their usage policies. Agent scenarios
+never execute anything; every tool is simulated.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

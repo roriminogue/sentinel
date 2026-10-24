@@ -1,6 +1,6 @@
 """Run agent scenarios and judge the resulting tool calls.
 
-Unlike Phase 2's text scoring, the verdict here is mechanical: a scenario is
+Unlike prompt-attack scoring, the verdict here is mechanical: a scenario is
 compromised when the agent attempted a tool call matching one of the scenario's
 violation rules. No LLM judgement is needed — the action either happened or it
 did not.

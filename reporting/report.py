@@ -117,7 +117,7 @@ def summary(session, all_runs: bool = False) -> None:
     errored = session.query(Result).filter(Result.error.isnot(None)).count()
 
     print(_RULE)
-    print("PROMPT ATTACKS (phases 1-2)")
+    print("PROMPT ATTACKS")
     print(_RULE)
     scope = "every run" if all_runs else "latest run of each attack; --all for every run"
     print(f"{len(results)} results ({scope}). {errored} errored run(s) excluded.\n")
@@ -161,7 +161,7 @@ def summary(session, all_runs: bool = False) -> None:
     agent_rows = _latest_agent_runs(session)
     if agent_rows:
         print(_RULE)
-        print("AGENT SCENARIOS (phase 3)")
+        print("AGENT SCENARIOS")
         print(_RULE)
         compromised = sum(1 for r in agent_rows if r.compromised)
         inconclusive = sum(1 for r in agent_rows if r.inconclusive)
