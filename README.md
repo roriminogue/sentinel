@@ -24,25 +24,117 @@ The target-model client, the scorers, and the agent client each sit behind an
 abstract interface, so adding a provider or a scoring strategy means writing
 one class.
 
-## Quick start
+## Getting started
+
+### What you need
+
+- **Python 3.11 or newer** — check with `python --version`.
+- **Git.**
+- **An Anthropic API key with credit.** Create one at
+  [console.anthropic.com](https://console.anthropic.com) under *API Keys*. When
+  creating it, set **Scope** to a workspace (for example *Default workspace*) —
+  an organization-level key is rejected with `This API key is not scoped to a
+  workspace`. API billing is separate from a Claude.ai subscription; add credit
+  under *Billing*. A full run against Claude Haiku 4.5 costs a few cents.
+
+You don't need a key just to try the code: the test suite runs offline.
+
+### 1. Install
+
+macOS / Linux:
 
 ```bash
 git clone https://github.com/roriminogue/sentinel.git
 cd sentinel
-python -m venv .venv
-source .venv/bin/activate        # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env             # then set ANTHROPIC_API_KEY in .env
-
-python runner/run.py                                  # 1. attack
-python agent/run_agent.py                             # 2. agent scenarios
-python scoring/score.py --scorer heuristic            # 3. score (free)
-python scoring/score.py --scorer llm-judge            #    score (LLM judge)
-python reporting/dashboard.py                         # 4. writes sentinel-report.html
+cp .env.example .env
 ```
 
-A full run against Claude Haiku 4.5 costs a few cents. The test suite needs no
-API key: `python -m pytest tests/`.
+Windows (PowerShell):
+
+```powershell
+git clone https://github.com/roriminogue/sentinel.git
+cd sentinel
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
+```
+
+Your prompt should now start with `(.venv)`. Activate the environment again
+each time you open a new terminal.
+
+Then open `.env` in any text editor and replace `sk-ant-...` with your key.
+`.env` is git-ignored — never paste your key anywhere else.
+
+Check the install (no key needed): `python -m pytest tests/` should report all
+tests passing.
+
+### 2. Run it
+
+The pipeline is three steps — **attack, score, report** — and each reads what
+the previous one saved to `sentinel.db`.
+
+```bash
+# Attack: send the 27 prompt attacks and save every response.
+python runner/run.py
+
+# Agent attacks: run the 11 tool-use scenarios. These are judged as they run,
+# so they print defended / compromised immediately and need no scoring step.
+python agent/run_agent.py
+
+# Score the prompt-attack responses. The heuristic is free; the LLM judge is
+# more accurate and costs a fraction of a cent per response.
+python scoring/score.py --scorer heuristic
+python scoring/score.py --scorer llm-judge
+
+# Report: write a single-file HTML report.
+python reporting/dashboard.py
+```
+
+The target and judge both default to Claude Haiku 4.5. To test another model,
+pass `--model`, e.g. `python runner/run.py --model claude-sonnet-5`.
+
+### 3. Read the results
+
+Open `sentinel-report.html` in a browser — double-click it, or run
+`open sentinel-report.html` (macOS), `xdg-open sentinel-report.html` (Linux), or
+`Invoke-Item sentinel-report.html` (Windows).
+
+How to read it:
+
+- **Refused** — the guardrail held. **Complied** — the attack got the content
+  it wanted. **Unclear** — no usable response.
+- **Defended** — the agent read the planted instruction and didn't act on it.
+  **Compromised** — it attempted the attacker's action. **Inconclusive** — it
+  never reached the planted instruction, so nothing was tested.
+- **Scorer disagreements** are where to look first: one of the two scorers is
+  wrong about each of those responses.
+
+For the full text of any attack and its response in the terminal:
+
+```bash
+python reporting/report.py --attack pi-004
+python runner/run.py --attack dj-001 --verbose      # re-run one attack, print it
+python agent/run_agent.py --scenario ag-008 --verbose
+```
+
+Attack IDs are listed in `attacks/corpus.py` (`dj-`, `pi-`, `eo-`, `mt-`) and
+`agent/scenarios.py` (`ag-001` to `ag-011`).
+
+### Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `This API key is not scoped to a workspace` | Create a new key with **Scope** set to a workspace (see above). Credit is per account, not per key. |
+| `authentication_error` / `401` | The key in `.env` is wrong or revoked. Check there are no spaces or quotes around it. |
+| `credit balance is too low` | Add credit under *Billing* in the Anthropic Console. |
+| Windows: `running scripts is disabled on this system` | Run `Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass`, then activate again. |
+| `ModuleNotFoundError` | The virtual environment isn't active. Activate it (prompt starts with `(.venv)`). |
+| `python` not found (Windows) | Use `py` instead, e.g. `py -m venv .venv`. |
+| Counts look too high | Reports show the latest run of each attack. Pass `--all` only if you want every historical run. |
 
 ## What building it taught me
 
@@ -103,9 +195,10 @@ sentinel/
 └── LICENSE           # MIT
 ```
 
-## Running attacks
+## Reference: running attacks
 
-Requires Python 3.11+.
+Every command below accepts `--db` to choose the database file. The sections
+that follow document each step's options in full.
 
 ```bash
 python runner/run.py --target anthropic --model claude-haiku-4-5
