@@ -27,12 +27,14 @@ from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from reporting.report import (  # noqa: E402
+    _configurations,
     _current_fingerprints,
     _is_stale,
     _latest_agent_runs,
     _latest_results,
     _latest_scores,
 )
+from runner.base_client import describe_system_prompt  # noqa: E402
 from storage import (  # noqa: E402
     AgentResult,
     AgentToolCall,
@@ -122,6 +124,7 @@ def gather(session, include_stale: bool, all_runs: bool = False) -> dict:
         "stale_count": len(stale),
         "stale_ids": sorted({r.attack_id for r in stale}),
         "models": models,
+        "configs": _configurations(results),
         "include_stale": include_stale,
     }
 
@@ -335,6 +338,12 @@ def render(data: dict) -> str:
     )
 
     notes = []
+    if len(data["configs"]) > 1:
+        notes.append(
+            f"Warning: these results mix {len(data['configs'])} different setups "
+            "(model or system prompt), so the counts blend different tests. "
+            "Use a separate --db for each setup."
+        )
     if data["stale_count"] and not data["include_stale"]:
         notes.append(
             f'{data["stale_count"]} result(s) excluded: they came from older '
@@ -348,6 +357,10 @@ def render(data: dict) -> str:
 
     generated = datetime.now().strftime("%Y-%m-%d %H:%M")
     models = ", ".join(data["models"])
+    prompts = sorted({describe_system_prompt(p) for _, p in data["configs"]}) or [
+        describe_system_prompt(None)
+    ]
+    system_prompt = "; ".join(prompts)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -459,7 +472,7 @@ def render(data: dict) -> str:
 <div class="wrap">
   <header>
     <h1>Sentinel Report</h1>
-    <p class="sub">Target: {_esc(models)} · generated {_esc(generated)}</p>
+    <p class="sub">Target: {_esc(models)} · System prompt: {_esc(system_prompt)} · generated {_esc(generated)}</p>
   </header>
   {note_html}
   <div class="tiles">{"".join(tiles)}</div>

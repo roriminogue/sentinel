@@ -16,11 +16,16 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from attacks import load_corpus  # noqa: E402
-from runner.base_client import TargetClient  # noqa: E402
+from runner.base_client import TargetClient, describe_system_prompt  # noqa: E402
 from storage import Result, make_engine, make_session_factory, session_scope  # noqa: E402
 
 
-def build_client(target: str, model: str | None, max_tokens: int) -> TargetClient:
+def build_client(
+    target: str,
+    model: str | None,
+    max_tokens: int,
+    system_prompt: str | None = None,
+) -> TargetClient:
     """Factory mapping a --target name to a concrete client.
 
     Add new providers here (openai, ollama, ...) as they implement TargetClient.
@@ -28,10 +33,29 @@ def build_client(target: str, model: str | None, max_tokens: int) -> TargetClien
     if target == "anthropic":
         from runner.anthropic_client import DEFAULT_MODEL, AnthropicClient
 
-        return AnthropicClient(model=model or DEFAULT_MODEL, max_tokens=max_tokens)
+        return AnthropicClient(
+            model=model or DEFAULT_MODEL,
+            max_tokens=max_tokens,
+            system_prompt=system_prompt,
+        )
     raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic")
 
 
+def load_system_prompt(text: str | None, path: str | None) -> str | None:
+    """Resolve --system-prompt / --system-prompt-file into the prompt text."""
+    if path:
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError as exc:
+            raise ValueError(f"Cannot read system prompt file {path!r}: {exc}") from exc
+    if text is None:
+        return None
+    if not text.strip():
+        # An empty prompt would silently run the bare model while the results
+        # claimed a configuration was tested.
+        raise ValueError("System prompt is empty.")
+    return text.strip()
 
 
 def run(
@@ -68,6 +92,8 @@ def run(
 
         if verbose:
             print("    " + "-" * 66)
+            if client.system_prompt:
+                print(f"    SYSTEM PROMPT: {describe_system_prompt(client.system_prompt)}")
             for turn_number, turn in enumerate(attack.messages, start=1):
                 print(f"    [turn {turn_number}] PROMPT: {turn}")
             shown = response_text if len(response_text) <= 800 else response_text[:800] + " ..."
@@ -85,6 +111,7 @@ def run(
                     response=response_text,
                     stop_reason=stop_reason,
                     target_model=client.model,
+                    system_prompt=client.system_prompt,
                     turn_count=len(attack.messages),
                     error=error_text,
                 )
@@ -131,15 +158,27 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print each prompt and the model's response.",
     )
+    instructions = parser.add_mutually_exclusive_group()
+    instructions.add_argument(
+        "--system-prompt",
+        help="Setup instructions to run the model under, as text.",
+    )
+    instructions.add_argument(
+        "--system-prompt-file",
+        help="Setup instructions to run the model under, read from a file "
+        "(e.g. your chatbot's system prompt).",
+    )
     args = parser.parse_args(argv)
 
     try:
-        client = build_client(args.target, args.model, args.max_tokens)
+        system_prompt = load_system_prompt(args.system_prompt, args.system_prompt_file)
+        client = build_client(args.target, args.model, args.max_tokens, system_prompt)
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
     print(f"Target: {args.target} / model: {client.model}")
+    print(f"System prompt: {describe_system_prompt(client.system_prompt)}")
     print(f"Database: {args.db}\n")
 
     try:

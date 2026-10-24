@@ -41,6 +41,9 @@ class Result(Base):
     # scoring must count that as refused, not as an unreadable empty response.
     stop_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
     target_model: Mapped[str] = mapped_column(String(128), index=True)
+    # Instructions the target ran under (None = bare model). The same attack
+    # against a different configuration is a different test.
+    system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     turn_count: Mapped[int] = mapped_column(Integer, default=1)
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime, default=_utcnow)

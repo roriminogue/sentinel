@@ -27,15 +27,21 @@ class FakeClient(TargetClient):
         model: str = "fake-model",
         fail_on: set[str] | None = None,
         provider_refuses: bool = False,
+        system_prompt: str | None = None,
     ):
         self._model = model
         self._fail_on = fail_on or set()
         self._provider_refuses = provider_refuses
+        self._system_prompt = system_prompt
         self.calls: list[List[str]] = []
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def system_prompt(self) -> str | None:
+        return self._system_prompt
 
     def send(self, turns: List[str]) -> TargetReply:
         self.calls.append(list(turns))

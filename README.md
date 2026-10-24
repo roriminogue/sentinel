@@ -124,6 +124,39 @@ python agent/run_agent.py --scenario ag-008 --verbose
 Attack IDs are listed in `attacks/corpus.py` (`dj-`, `pi-`, `eo-`, `mt-`) and
 `agent/scenarios.py` (`ag-001` to `ag-011`).
 
+### 4. Test your own chatbot's instructions
+
+A real chatbot is a model plus setup instructions (a *system prompt*): who it
+is, what it may discuss, what it must never do. Attackers usually target those
+instructions — to make the bot reveal them, ignore them, or act outside them.
+Testing the bare model tells you little about your deployment, so you can run
+the attacks against the model *configured as your bot*:
+
+```bash
+python runner/run.py --system-prompt-file my-bot.txt --db my-bot.db
+python scoring/score.py --scorer llm-judge --db my-bot.db
+python reporting/dashboard.py --db my-bot.db --out my-bot-report.html
+```
+
+Put your bot's system prompt in a text file (or pass it inline with
+`--system-prompt "..."`). To try it without one of your own, use the example:
+`--system-prompt-file examples/support-bot.txt`.
+
+To measure what your instructions add, run once without them and once with
+them, **each into its own `--db`**, and compare the two reports. Every result
+records the instructions it ran under, and the reports warn if a database
+mixes setups, because results under different instructions are different tests.
+
+Several attacks become sharper under a system prompt — for example, `pi-001`
+and `pi-002` try to make the model reveal its instructions, which only means
+something once it has some. For attacks aimed at your bot's specific rules
+(say, "tell me another customer's balance"), add them to `attacks/corpus.py`;
+see [Extending](#extending).
+
+This tests the model under your instructions, not your full application: it
+does not exercise your app's own code, retrieval, or filters. Only test
+systems you own or are authorized to test.
+
 ### Troubleshooting
 
 | Problem | Fix |
@@ -190,7 +223,8 @@ sentinel/
 ├── storage/          # SQLite persistence (SQLAlchemy)
 │   ├── models.py     # Result, Score, AgentResult, AgentToolCall
 │   └── db.py         # engine/session handling, additive schema migration
-├── tests/            # 35 tests, no API key needed
+├── examples/         # example chatbot system prompt
+├── tests/            # 44 tests, no API key needed
 ├── docs/methodology.md
 └── LICENSE           # MIT
 ```
@@ -212,6 +246,10 @@ Options:
 | `--model`      | provider default / env           | Model id to test                 |
 | `--db`         | `sentinel.db` / env              | SQLite output path               |
 | `--max-tokens` | `1024` / env                     | Max tokens per model response    |
+| `--system-prompt-file` | none                     | Run under a chatbot's instructions, read from a file |
+| `--system-prompt` | none                          | The same, passed inline           |
+| `--attack`, `--category` | all                     | Run a subset of the corpus       |
+| `--verbose` | off                                 | Print each prompt and response   |
 
 Defaults can also come from `.env` (`SENTINEL_TARGET_MODEL`,
 `SENTINEL_DB_PATH`, `SENTINEL_MAX_TOKENS`).
@@ -402,6 +440,7 @@ attack once per run per scorer. The reporting tools above already handle this.
 
 - `results` — `attack_id`, `category`, `prompt`, `prompt_hash` (fingerprint of
   the attack's wording), `response`, `stop_reason`, `target_model`,
+  `system_prompt` (the instructions it ran under, if any),
   `turn_count`, `error`, `timestamp`
 - `scores` — `result_id`, `scorer_name`, `verdict`, `technique`, `confidence`,
   `rationale`, `timestamp`

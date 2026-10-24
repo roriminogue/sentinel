@@ -30,6 +30,7 @@ class AnthropicClient(TargetClient):
         api_key: Optional[str] = None,
         max_retries: int = 4,
         base_backoff: float = 2.0,
+        system_prompt: Optional[str] = None,
     ) -> None:
         # anthropic.Anthropic() reads ANTHROPIC_API_KEY from the environment
         # when api_key is None.
@@ -38,10 +39,15 @@ class AnthropicClient(TargetClient):
         self._max_tokens = max_tokens
         self._max_retries = max_retries
         self._base_backoff = base_backoff
+        self._system_prompt = system_prompt
 
     @property
     def model(self) -> str:
         return self._model
+
+    @property
+    def system_prompt(self) -> Optional[str]:
+        return self._system_prompt
 
     def send(self, turns: List[str]) -> TargetReply:
         messages = []
@@ -61,14 +67,19 @@ class AnthropicClient(TargetClient):
         return reply
 
     def _create_with_retry(self, messages: list) -> "anthropic.types.Message":
+        request = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "messages": messages,
+        }
+        # Omit the field entirely when unset: sending system=None is not the
+        # same request as sending no system prompt.
+        if self._system_prompt:
+            request["system"] = self._system_prompt
         attempt = 0
         while True:
             try:
-                return self._client.messages.create(
-                    model=self._model,
-                    max_tokens=self._max_tokens,
-                    messages=messages,
-                )
+                return self._client.messages.create(**request)
             except _RETRYABLE:
                 if attempt >= self._max_retries:
                     raise

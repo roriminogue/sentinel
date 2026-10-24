@@ -15,6 +15,16 @@ from typing import List, Optional
 PROVIDER_REFUSAL = "refusal"
 
 
+def describe_system_prompt(system_prompt: Optional[str]) -> str:
+    """One-line human description of a configuration's system prompt."""
+    if not system_prompt:
+        return "none (bare model)"
+    first_line = system_prompt.splitlines()[0]
+    if len(first_line) > 60:
+        first_line = first_line[:60] + "..."
+    return f'"{first_line}" ({len(system_prompt)} characters)'
+
+
 @dataclass(frozen=True)
 class TargetReply:
     text: str
@@ -30,6 +40,16 @@ class TargetClient(ABC):
     @abstractmethod
     def model(self) -> str:
         """Identifier of the model being tested (stored with each result)."""
+
+    @property
+    def system_prompt(self) -> Optional[str]:
+        """Setup instructions the target runs under, if any.
+
+        Real chatbots are a model plus instructions; testing the bare model
+        says little about a deployment. Recorded with every result so runs
+        under different instructions are never mistaken for the same test.
+        """
+        return None
 
     @abstractmethod
     def send(self, turns: List[str]) -> TargetReply:

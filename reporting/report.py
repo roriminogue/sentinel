@@ -101,6 +101,38 @@ def _latest_results(session, all_runs: bool = False) -> list[Result]:
     return sorted(newest.values(), key=lambda r: r.attack_id)
 
 
+def _configurations(results) -> list[tuple[str, str | None]]:
+    """Distinct (model, system prompt) setups behind a set of results."""
+    return sorted(
+        {(r.target_model, r.system_prompt) for r in results},
+        key=lambda c: (c[0], c[1] or ""),
+    )
+
+
+def _configuration_lines(results) -> list[str]:
+    """Describe the setup(s) tested; warn when more than one is mixed in.
+
+    Results from different models or different instructions are different
+    tests. If the latest results span several, the counts blend them.
+    """
+    from runner.base_client import describe_system_prompt
+
+    configs = _configurations(results)
+    if len(configs) <= 1:
+        return [
+            f"Model: {model}   System prompt: {describe_system_prompt(prompt)}"
+            for model, prompt in configs
+        ]
+    lines = [
+        f"WARNING: these results mix {len(configs)} different setups, so the "
+        "counts below blend different tests:"
+    ]
+    for model, prompt in configs:
+        lines.append(f"  - {model}, system prompt: {describe_system_prompt(prompt)}")
+    lines.append("  Use a separate --db for each model / system prompt you test.")
+    return lines
+
+
 def _latest_agent_runs(session, all_runs: bool = False) -> list[AgentResult]:
     """Most recent run per scenario, so repeated runs don't look like duplicates."""
     rows = session.query(AgentResult).order_by(AgentResult.id).all()
@@ -120,7 +152,10 @@ def summary(session, all_runs: bool = False) -> None:
     print("PROMPT ATTACKS")
     print(_RULE)
     scope = "every run" if all_runs else "latest run of each attack; --all for every run"
-    print(f"{len(results)} results ({scope}). {errored} errored run(s) excluded.\n")
+    print(f"{len(results)} results ({scope}). {errored} errored run(s) excluded.")
+    for line in _configuration_lines(results):
+        print(line)
+    print()
 
     fingerprints = _current_fingerprints()
     stale = [r for r in results if _is_stale(r, fingerprints)]
@@ -249,6 +284,10 @@ def attack_detail(session, needle: str) -> None:
         print(_RULE)
         mark = "  [STALE: prompt has changed since]" if _is_stale(result, fingerprints) else ""
         print(f"{result.attack_id}  [{result.category}]  model={result.target_model}{mark}")
+        if result.system_prompt:
+            from runner.base_client import describe_system_prompt
+
+            print(f"  system prompt: {describe_system_prompt(result.system_prompt)}")
         for s in scores:
             technique = f", technique={s.technique}" if s.technique else ""
             print(f"  {s.scorer_name}: verdict={s.verdict}{technique}")
