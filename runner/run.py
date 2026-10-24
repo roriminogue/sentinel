@@ -25,6 +25,8 @@ def build_client(
     model: str | None,
     max_tokens: int,
     system_prompt: str | None = None,
+    config_path: str | None = None,
+    authorized: bool = False,
 ) -> TargetClient:
     """Factory mapping a --target name to a concrete client.
 
@@ -38,7 +40,24 @@ def build_client(
             max_tokens=max_tokens,
             system_prompt=system_prompt,
         )
-    raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic")
+    if target == "http":
+        if not config_path:
+            raise ValueError("--target http needs --config pointing at a target config file.")
+        if system_prompt is not None:
+            raise ValueError(
+                "--system-prompt applies to the anthropic target. An HTTP "
+                "chatbot carries its own instructions server-side."
+            )
+        if not authorized:
+            raise ValueError(
+                "Refusing to send attacks to an HTTP endpoint without --authorized. "
+                "Only test systems you own or are permitted to test; pass "
+                "--authorized to confirm."
+            )
+        from runner.http_client import HTTPTargetClient, load_http_config
+
+        return HTTPTargetClient(load_http_config(config_path))
+    raise ValueError(f"Unknown target {target!r}. Supported targets: anthropic, http")
 
 
 def load_system_prompt(text: str | None, path: str | None) -> str | None:
@@ -168,11 +187,29 @@ def main(argv: list[str] | None = None) -> int:
         help="Setup instructions to run the model under, read from a file "
         "(e.g. your chatbot's system prompt).",
     )
+    parser.add_argument(
+        "--config",
+        help="For --target http: path to a JSON config describing your chatbot "
+        "endpoint (see examples/http-target.example.json).",
+    )
+    parser.add_argument(
+        "--authorized",
+        action="store_true",
+        help="Confirm you own or are permitted to test the --target http "
+        "endpoint. Required before any attack is sent to it.",
+    )
     args = parser.parse_args(argv)
 
     try:
         system_prompt = load_system_prompt(args.system_prompt, args.system_prompt_file)
-        client = build_client(args.target, args.model, args.max_tokens, system_prompt)
+        client = build_client(
+            args.target,
+            args.model,
+            args.max_tokens,
+            system_prompt,
+            config_path=args.config,
+            authorized=args.authorized,
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

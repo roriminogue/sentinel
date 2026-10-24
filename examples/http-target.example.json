@@ -1,0 +1,12 @@
+{
+  "name": "my-support-bot",
+  "url": "https://your-bot.example.com/api/chat",
+  "method": "POST",
+  "headers": {},
+  "auth_env": "MY_BOT_TOKEN",
+  "auth_header": "Authorization",
+  "auth_prefix": "Bearer ",
+  "body_template": { "message": "{prompt}" },
+  "response_path": "reply",
+  "min_interval_seconds": 1.0
+}

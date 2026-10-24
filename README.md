@@ -157,6 +157,57 @@ This tests the model under your instructions, not your full application: it
 does not exercise your app's own code, retrieval, or filters. Only test
 systems you own or are authorized to test.
 
+### 5. Test your own chatbot at its web address
+
+To test your chatbot as it is actually deployed — your app's code, filters, and
+instructions included — point Sentinel at its HTTP endpoint. Copy
+`examples/http-target.example.json`, edit it to describe your endpoint, then:
+
+```bash
+python runner/run.py --target http --config my-bot.json --authorized --db my-bot.db
+python scoring/score.py --scorer heuristic --db my-bot.db
+python reporting/dashboard.py --db my-bot.db --out my-bot-report.html
+```
+
+**`--authorized` is required.** This sends real attack traffic to a real
+server, so Sentinel refuses to run against an HTTP target until you confirm you
+own it or have permission to test it. Never point it at a chatbot you don't
+control.
+
+The config tells Sentinel how to talk to your endpoint:
+
+| Key | Meaning |
+|---|---|
+| `url` | Your chatbot's endpoint (http or https) |
+| `body_template` | The JSON body to send, with `"{prompt}"` where the attack text goes |
+| `response_path` | Where the reply is in the JSON response, as a dotted path |
+| `auth_env` | *Optional.* Name of an environment variable holding your API token |
+| `auth_header`, `auth_prefix` | *Optional.* How the token is sent (default `Authorization: Bearer <token>`) |
+| `headers` | *Optional.* Extra request headers |
+| `name` | *Optional.* Label for the results (defaults to the URL's host) |
+| `min_interval_seconds` | *Optional.* Minimum seconds between requests (default 1) |
+
+For example, an endpoint that takes `{"message": "..."}` and returns
+`{"reply": "..."}` uses `"body_template": {"message": "{prompt}"}` and
+`"response_path": "reply"`. An OpenAI-style endpoint uses
+`"body_template": {"model": "...", "messages": [{"role": "user", "content": "{prompt}"}]}`
+and `"response_path": "choices.0.message.content"`.
+
+Put the token itself in `.env` (e.g. `MY_BOT_TOKEN=...`) and name that variable
+in `auth_env` — the token never goes in the config file. The attack text is
+always inserted as a properly encoded JSON string, so it cannot change the
+structure of the request.
+
+Limits of the HTTP connector:
+
+- **Multi-turn attacks are sent as one message** containing the labeled
+  conversation, because HTTP chatbots have no common format for conversation
+  history. A stateful endpoint would need its own client.
+- **Agent scenarios don't run over HTTP.** They need the model to call tools,
+  which a generic chat endpoint doesn't expose.
+- **Scoring is separate.** The heuristic scorer is free and offline; the LLM
+  judge still needs an Anthropic API key.
+
 ### Troubleshooting
 
 | Problem | Fix |
@@ -202,6 +253,7 @@ sentinel/
 ├── runner/           # fire attacks at a target model
 │   ├── base_client.py     # TargetClient abstract interface
 │   ├── anthropic_client.py# Anthropic implementation
+│   ├── http_client.py     # any chatbot reachable over HTTP
 │   └── run.py             # CLI entrypoint
 ├── scoring/          # judge the responses
 │   ├── labels.py          # Verdict enum
@@ -223,8 +275,8 @@ sentinel/
 ├── storage/          # SQLite persistence (SQLAlchemy)
 │   ├── models.py     # Result, Score, AgentResult, AgentToolCall
 │   └── db.py         # engine/session handling, additive schema migration
-├── examples/         # example chatbot system prompt
-├── tests/            # 44 tests, no API key needed
+├── examples/         # example system prompt and HTTP target config
+├── tests/            # 59 tests, no API key or network needed
 ├── docs/methodology.md
 └── LICENSE           # MIT
 ```
@@ -250,6 +302,8 @@ Options:
 | `--system-prompt` | none                          | The same, passed inline           |
 | `--attack`, `--category` | all                     | Run a subset of the corpus       |
 | `--verbose` | off                                 | Print each prompt and response   |
+| `--target http --config FILE` | none             | Attack your own chatbot at its URL |
+| `--authorized` | off                              | Required for `--target http`: confirms you may test it |
 
 Defaults can also come from `.env` (`SENTINEL_TARGET_MODEL`,
 `SENTINEL_DB_PATH`, `SENTINEL_MAX_TOKENS`).
@@ -490,7 +544,9 @@ measure whether a model refuses appropriately. Each attack's payload is a
 and no model responses (run databases and reports are git-ignored).
 
 Run Sentinel only against models and systems you are authorized to test — your
-own deployments, or provider APIs within their usage policies. Agent scenarios
+own deployments, or provider APIs within their usage policies. The HTTP
+connector enforces this as far as a tool can: it will not send anything to an
+endpoint without `--authorized`, and it rate-limits every request. Agent scenarios
 never execute anything; every tool is simulated.
 
 ## License
