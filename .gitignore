@@ -10,8 +10,9 @@ __pycache__/
 venv/
 env/
 
-# Sentinel run artifacts
+# Sentinel run artifacts (contain model output from adversarial runs)
 *.db
 *.sqlite
 *.sqlite3
 data/
+*-report.html

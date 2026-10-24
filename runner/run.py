@@ -15,7 +15,7 @@ from dotenv import load_dotenv
 # Allow running as `python runner/run.py` from the repo root.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from attacks import Attack, load_corpus  # noqa: E402
+from attacks import load_corpus  # noqa: E402
 from runner.base_client import TargetClient  # noqa: E402
 from storage import Result, make_engine, make_session_factory, session_scope  # noqa: E402
 

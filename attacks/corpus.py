@@ -23,7 +23,7 @@ declined the persona but answered anyway, producing an uninterpretable result.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from .categories import AttackCategory

@@ -1,4 +1,4 @@
-anthropic>=1.0.0
-python-dotenv>=1.0.0
-SQLAlchemy>=2.0.0
+anthropic>=1.0.0,<3
+python-dotenv>=1.0.0,<2
+SQLAlchemy>=2.0.0,<3
 pytest>=8.0.0
